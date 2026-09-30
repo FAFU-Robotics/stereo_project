@@ -588,7 +588,7 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     输出：进程退出码
     """
     from depth_utils import (CameraParams, colorize_depth, depth_stats,
-                             disparity_to_depth, save_depth_npy)
+                             disparity_to_depth, filter_speckles, save_depth_npy)
     from pointcloud import PointCloudBuilder
     from stereo_depth import FFSError, FFSDepthEstimator
 
@@ -720,7 +720,21 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 if not consist and n_processed == 0:
                     print(f"  [警告] 内参分辨率 {params_model.width}x{params_model.height} 与视差尺寸 "
                           f"{out['disp'].shape[1]}x{out['disp'].shape[0]} 不一致，深度可能整体错倍数！")
-                depth, valid = disparity_to_depth(out["disp"], params_model)
+
+                # 两道便宜的安全网（都在深度图上做，实测代价 < 5 ms）：
+                #   ① 外推值过滤：视差超出 ffs.max_disp 的部分是网络外推的，不可信；
+                #   ② 散斑过滤：丢掉孤立的小连通区域。
+                depth_cfg = cfg.get("depth", {}) or {}
+                ratio = float(depth_cfg.get("disp_extrapolation_ratio", 0.98) or 0.0)
+                max_valid = (est.max_disp * ratio) if ratio > 0 else None
+                # 过滤前"模型认为有效"的像素数（与 disparity_to_depth 的默认下限一致）
+                n_valid_total = int((np.isfinite(out["disp"]) & (out["disp"] >= 0.5)).sum())
+                depth, valid = disparity_to_depth(out["disp"], params_model, max_valid_disp=max_valid)
+                n_after_extrap = int(valid.sum())
+                valid = filter_speckles(valid, int(depth_cfg.get("min_speckle_size", 0) or 0))
+                n_after_speckle = int(valid.sum())
+                extrap_pct = 100.0 * (n_valid_total - n_after_extrap) / max(n_valid_total, 1)
+                speckle_pct = 100.0 * (n_after_extrap - n_after_speckle) / max(n_after_extrap, 1)
                 st = depth_stats(depth, valid)
                 t_pc0 = time.perf_counter()
                 pcd, pc_stats = builder.build(depth, params_model, out["left_model_rgb"])
@@ -730,7 +744,7 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                         "depth": depth, "valid": valid, "params": params_model,
                         "left_model_rgb": out["left_model_rgb"], "scale": scale,
                         "stats": st, "pc_stats": pc_stats, "infer_ms": out["timings_ms"]["infer"],
-                        "pc_ms": pc_ms}
+                        "pc_ms": pc_ms, "extrap_pct": extrap_pct, "speckle_pct": speckle_pct}
 
                 # Open3D：复用几何体；点云为空时不要更新（否则每帧都会刷
                 # "The number of points is 0 when creating axis-aligned bounding box"）
@@ -775,7 +789,8 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 f"capture {cam.stats['measured_fps']:.1f} fps | ffs {avg_infer:.0f} ms "
                 f"| cloud {last['pc_ms']:.0f} ms | end-to-end {e2e:.2f} fps | frames {n_processed}",
                 f"depth valid {st['valid_ratio']:.1f}% | median {st['median_m']:.3f} m | "
-                f"range {zmin_m}..{zmax_m} m | points {last['pc_stats']['points']}",
+                f"range {zmin_m}..{zmax_m} m | points {last['pc_stats']['points']} | "
+                f"filtered: extrap {last['extrap_pct']:.1f}% speckle {last['speckle_pct']:.2f}%",
                 f"intrinsics: {'CALIBRATED' if params_full.calibrated else 'UNCALIBRATED (placeholder fx='
                               f'{params_full.fx:.0f}, baseline={params_full.baseline_m:.3f}m)'}"
                 f" | scale={last['scale']} valid_iters={est.valid_iters}",

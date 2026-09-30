@@ -82,37 +82,49 @@ echo   [3] Live disparity, faster preset  (--scale 0.5 --valid-iters 4)
 echo   [4] Live point cloud [stage 4]     (main.py --mode pointcloud)
 echo   [5] Live point cloud, faster       (--scale 0.5 --valid-iters 4)
 echo   [6] Point cloud + AUTO-SAVE        (30 frames, saves PLY + depth + images)
-echo   [7] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
-echo   [8] DirectShow capture test        (pygrabber, no OpenCV)
-echo   [9] OpenCV capture test            (saves a snapshot)
+echo   [7] Point cloud, max_disp=320      (for NEAR objects; slower, ~4.1 GB VRAM)
+echo   [8] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
+echo   [9] DirectShow capture test        (pygrabber, no OpenCV)
+echo  [10] OpenCV capture test            (saves a snapshot)
 echo   [0] Exit
 echo ============================================================
 set "DO="
-set /p "CH=Type 1..9 or 0 then press Enter: "
+set /p "CH=Type 1..10 or 0 then press Enter: "
 if "%CH%"=="1" set "DO=PREVIEW"
 if "%CH%"=="2" set "DO=DEPTH"
 if "%CH%"=="3" set "DO=DEPTHFAST"
 if "%CH%"=="4" set "DO=CLOUD"
 if "%CH%"=="5" set "DO=CLOUDFAST"
 if "%CH%"=="6" set "DO=CLOUDSAVE"
-if "%CH%"=="7" set "DO=DEPTHSAVE"
-if "%CH%"=="8" set "DO=DSTEST"
-if "%CH%"=="9" set "DO=CVTEST"
+if "%CH%"=="7" set "DO=CLOUDNEAR"
+if "%CH%"=="8" set "DO=DEPTHSAVE"
+if "%CH%"=="9" set "DO=DSTEST"
+if "%CH%"=="10" set "DO=CVTEST"
 if "%CH%"=="0" set "DO=EXIT"
 if not defined DO goto menu
 if /i "%DO%"=="EXIT" goto done
-if /i "%DO%"=="PREVIEW"   call :do_preview
-if /i "%DO%"=="DEPTH"     call :do_depth
-if /i "%DO%"=="DEPTHFAST" call :do_depth_fast
-if /i "%DO%"=="CLOUD"     call :do_cloud
-if /i "%DO%"=="CLOUDFAST" call :do_cloud_fast
-if /i "%DO%"=="CLOUDSAVE" call :do_cloud_save
-if /i "%DO%"=="DEPTHSAVE" call :do_depth_save
-if /i "%DO%"=="CVTEST"    call :do_cvtest
-if /i "%DO%"=="DSTEST"    call :do_dstest
+if /i "%DO%"=="PREVIEW"    call :do_preview
+if /i "%DO%"=="DEPTH"      call :do_depth
+if /i "%DO%"=="DEPTHFAST"  call :do_depth_fast
+if /i "%DO%"=="CLOUD"      call :do_cloud
+if /i "%DO%"=="CLOUDFAST"  call :do_cloud_fast
+if /i "%DO%"=="CLOUDSAVE"  call :do_cloud_save
+if /i "%DO%"=="CLOUDNEAR"  call :do_cloud_near
+if /i "%DO%"=="DEPTHSAVE"  call :do_depth_save
+if /i "%DO%"=="CVTEST"     call :do_cvtest
+if /i "%DO%"=="DSTEST"     call :do_dstest
 echo.
 pause
 goto menu
+
+:do_cloud_near
+echo.
+echo --- live point cloud with max_disp = 320 (for NEAR objects) ---
+echo     Use this when a large part of the picture sits closer than ~20 cm:
+echo     with max_disp=192 those pixels are extrapolated by the network; 320 gives
+echo     the model a real search range for them. Cost: slower (~4 FPS) and ~4.1 GB VRAM.
+"%PY%" main.py --mode pointcloud --max-disp 320
+exit /b
 
 :do_cloud_save
 echo.
