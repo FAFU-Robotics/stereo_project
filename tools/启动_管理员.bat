@@ -85,7 +85,7 @@ echo   [6] Point cloud + AUTO-SAVE        (30 frames, saves PLY + depth + images
 echo   [7] Point cloud, max_disp=320      (for NEAR objects; slower, ~4.1 GB VRAM)
 echo   [8] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
 echo   [9] DirectShow capture test        (pygrabber, no OpenCV)
-echo  [10] OpenCV capture test            (saves a snapshot)
+echo  [10] OpenCV camera check            (standalone; normal-vs-admin compare)
 echo   [0] Exit
 echo ============================================================
 set "DO="
@@ -186,8 +186,11 @@ exit /b
 
 :do_cvtest
 echo.
-echo --- OpenCV capture test ---
-"%PY%" tools\preview_any.py --index 1 --no-display --max-frames 15 --res 1280x480 --fourcc MJPG --save "output\probe\opencv_idx1.png"
+echo --- OpenCV camera check (standalone) ---
+echo     Scans indexes 0..2 on both backends (dshow / msmf) and prints whether the
+echo     process is elevated. Compare with the NORMAL run: the non-elevated bat
+echo     in this tools folder whose name starts with the camera word.
+"%PY%" tools\opencv_camera_check.py
 exit /b
 
 :do_dstest
