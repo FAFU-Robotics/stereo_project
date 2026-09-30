@@ -1,0 +1,126 @@
+# =============================================================================
+#  stereo_project 主配置文件
+#  ---------------------------------------------------------------------------
+#  设计原则：
+#    1) 所有"可调参数"集中在这里，代码里不硬编码摄像头索引、分辨率、路径。
+#    2) 临时参数（未标定）与正式标定参数严格分开存放，绝不混用：
+#         - calibration.calibrated = false 时，程序一律使用 depth.temp 下的临时值
+#         - 使用临时值产生的深度/点云一律标注"未标定，仅用于流程验证"
+#    3) 带 【待确认】【待实测】 标记的项，必须由实测或厂家确认后填写，不允许猜。
+# =============================================================================
+
+project:
+  name: stereo_project
+  # 官方 Fast-FoundationStereo 源码位置（相对项目根目录）
+  # 注意：保持官方目录结构原样，不要为了"目录整齐"而搬动其中的文件
+  ffs_repo: third_party/Fast-FoundationStereo
+  output_dir: output
+  weights_dir: weights
+  calibration_dir: calibration
+
+# =============================================================================
+# 相机
+# =============================================================================
+camera:
+  # 采集模式，二选一：
+  #   side_by_side —— 一个 USB 设备输出"左右拼接"画面（实测 DECXIN 很可能是这种）
+  #   dual         —— 两个独立 UVC 设备，各占一个 OpenCV 索引
+  # 【待实测确认】由 tools/probe_cameras.py 的结果决定；确认前不要用它做测量
+  mode: side_by_side
+
+  # ---- side_by_side 模式参数 ----
+  single_index: 2          # 【待实测确认】单设备索引
+  split: left_right        # left_right = 左半幅是左眼；right_left = 右半幅是左眼
+  eye_width: 0             # 每只眼的有效宽度；0 = 自动对半切（宽//2）
+
+  # ---- dual 模式参数 ----
+  left_index: 1            # 【待实测确认】
+  right_index: 2           # 【待实测确认】
+
+  # ---- 通用采集参数 ----
+  backend: dshow           # dshow / msmf / any
+  fourcc: MJPG             # MJPG / YUY2 / ""（不设置）
+  width: 1280              # 请求宽度（拼接模式下是"整幅"宽度）
+  height: 480              # 请求高度
+  fps: 30                  # 请求帧率（仅建议值，实际以实测为准）
+  warmup_frames: 15        # 打开后丢弃的前若干帧，等自动曝光/白平衡稳定
+  read_retry: 3            # 单帧读取失败时的重试次数
+  # 黑屏判定：平均灰度与标准差同时低于阈值 => 判定为黑屏（不静默当成正常画面）
+  black_mean_threshold: 1.0
+  black_std_threshold: 1.0
+
+# =============================================================================
+# 深度（视差 -> 深度）
+# =============================================================================
+depth:
+  # 【关键】标定状态开关。false = 未标定，只允许流程验证，禁止测量。
+  calibrated: false
+
+  # ---- 未标定阶段使用的临时参数（仅用于跑通流程）----
+  temp:
+    fx: 500.0              # 临时焦距（像素），纯粹占位，不是这台相机的真实值
+    fy: 500.0
+    cx: 320.0
+    cy: 240.0
+    baseline_m: 0.060      # 厂家标称 60 mm（=0.06 m），尚未核实，且不等于完整标定
+    source: "厂家口头标称 60mm + 占位内参；未经标定验证，禁止用于测量"
+
+  # ---- 正式标定文件（阶段 5 生成）----
+  calibration_file: calibration/stereo_calib.yaml
+
+  # 显示/导出用的深度范围（米）
+  zmin_m: 0.15
+  zmax_m: 3.00
+
+# =============================================================================
+# Fast-FoundationStereo（FFS）
+# =============================================================================
+ffs:
+  weights_dir: weights/23-36-37
+  # 官方研究版 checkpoint 文件名（下载后放在 weights_dir 下）
+  # 同目录还需要官方自带的 cfg.yaml
+  model_file: model_best_bp2_serialize.pth
+  # 每次推理的迭代次数：越小越快、精度略降
+  valid_iters: 8
+  # 最大视差（代价体编码上限）：192 对大多数场景足够
+  max_disp: 192
+  # 输入缩放比例：模型建议图像宽度 < 1000，故常设 0.5
+  scale: 1.0
+  # 是否使用官方分层推理（hierachical）
+  hiera: 0
+  # 代价体构建后端：
+  #   pytorch1 —— 纯 PyTorch，Windows 可用（不需要 Triton）
+  #   triton   —— 需要 Triton，Windows 官方 PyTorch 不带，暂不使用
+  build_volume: pytorch1
+  # Windows 上没有 Triton，torch.compile 无法编译 CUDA 内核，必须禁用 dynamo
+  disable_torch_compile: true
+  # 是否去掉左右图非重叠区域（视差为负/越界）的深度
+  remove_invisible: 1
+  # 预热次数：第一次推理因编译/缓存会明显变慢，不计入统计
+  warmup_iters: 3
+
+# =============================================================================
+# 点云
+# =============================================================================
+pointcloud:
+  zmin_m: 0.15             # 与 depth.zmin_m 独立，便于单独调点云范围
+  zmax_m: 3.00
+  voxel_size_m: 0.005      # 体素下采样边长；0 = 不下采样
+  use_color: true          # 用左图 RGB 给点云着色
+  color_source: left
+  max_points: 400000       # 上采样上限保护，防止点数爆炸拖垮显示
+
+# =============================================================================
+# 运行时 / 显示
+# =============================================================================
+runtime:
+  window_name: "stereo_project"
+  display_scale: 1.0       # 显示窗口缩放；1.0 = 原始大小
+  status_every_n_frames: 30
+  # 保存目录（相对项目根目录，均为程序生成的数据，不入库）
+  save_dir: output
+  save_raw: true           # 保存左右原始图像
+  save_rectified: true     # 保存校正后图像（阶段 5 之后才有意义）
+  save_disparity: true
+  save_depth: true
+  save_pointcloud: true

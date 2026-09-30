@@ -1,0 +1,47 @@
+# =============================================================================
+#  stereo_project 依赖清单
+#  ---------------------------------------------------------------------------
+#  【本机现状】下面这些包**已经全部装好**在 D:\31931\Documents\python312 里，
+#  本阶段不需要再安装任何东西。此文件的作用是"记录并复现环境"。
+#
+#  【重要】PyTorch 必须用 cu128（CUDA 12.8）版本，原因：
+#      RTX 5060 Laptop 是 Blackwell 架构，计算能力 **sm_120**。
+#      官方 FFS readme 推荐的 torch==2.6.0+cu124 预编译内核只到 sm_90，
+#      **不含 sm_120**，装了也无法在这块卡上正确执行。
+#      本机实测可用组合（已通过真实矩阵乘法/卷积验证）：
+#          Python 3.12.10 + torch 2.8.0+cu128 + torchvision 0.23.0+cu128
+#
+#  【重要】xformers 不装。官方安装命令里有它，但通读 FFS 源码后确认
+#      代码中没有任何 `import xformers`，装了只是给 Windows 增加编译失败风险。
+#
+#  【重要】Triton 不装（Windows 官方 PyTorch 不带）。FFS 的 triton 代价体
+#      内核和 torch.compile 都需要它，因此本机运行时必须设置 TORCHDYNAMO_DISABLE=1，
+#      并把 ffs.build_volume 设为 pytorch1（纯 PyTorch 路径）。
+# =============================================================================
+
+# ---- 深度学习框架（必须 cu128 源；不要用默认 PyPI 的 CPU 版）----
+# 安装命令（供换机复现时使用，本机已装好，无需执行）：
+#   pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+torch==2.8.0
+torchvision==0.23.0
+
+# ---- Fast-FoundationStereo 官方 requirements.txt 内容（全部已装）----
+timm
+einops
+omegaconf
+scipy
+numpy
+scikit-image
+opencv-contrib-python
+imageio
+pyyaml
+open3d
+
+# ---- 本项目额外需要 ----
+# huggingface_hub：仅当选择从 HuggingFace 下载权重时需要
+huggingface_hub
+
+# ---- 明确不使用（保留说明，避免以后有人误装）----
+# xformers   : FFS 源码未 import，不需要
+# triton     : Windows 无官方包；若日后要提速，需先评估社区版 triton-windows
+# tensorrt   : 阶段 7 可选（官方有 ONNX/TRT 脚本）；启用前需单独评估驱动/版本匹配

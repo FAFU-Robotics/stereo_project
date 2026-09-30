@@ -1,0 +1,36 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# ---- 官方仓库里的演示素材（体积大、与功能无关；需要时用原始 zip 重新解压）----
+# 注意：官方 core/ scripts/ demo_data/ 等**代码与测试图像必须保留在仓库里**，
+#       只排除这些纯展示用的大文件（约 33 MB 的图片/视频）。
+third_party/Fast-FoundationStereo/assets/
+third_party/Fast-FoundationStereo/output_docker/
+
+# ---- 本项目自动生成的数据（不入库，避免仓库膨胀）----
+output/
+weights/*.pth
+weights/*.pt
+weights/*.onnx
+weights/*.engine
+third_party/**/output/
+third_party/**/output_docker/
+third_party/**/weights/*.pth
+
+# 探测/测试的中间产物
+output/probe/_tmp/
+*.log
+
+# 临时目录
+_tmp/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
