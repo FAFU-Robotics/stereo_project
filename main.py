@@ -32,7 +32,8 @@ import cv2
 import numpy as np
 import yaml
 
-from camera import CameraError, CameraReadError, StereoCamera, list_video_devices_from_registry, quick_probe_index
+from camera import (CameraError, CameraReadError, StereoCamera, frame_sharpness,
+                    list_video_devices_from_registry, quick_probe_index)
 from viewer import StereoViewer
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -368,6 +369,8 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     t_loop_start = time.perf_counter()
     n_processed = 0
     rec_infer_ms: List[float] = []
+    sharpness = 0.0
+    sharp_warned = False
 
     try:
         cam.open()
@@ -397,6 +400,17 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 rec_infer_ms.append(out["timings_ms"]["infer"])
                 if len(rec_infer_ms) > 30:
                     rec_infer_ms.pop(0)
+                # 清晰度（每 10 帧算一次，开销可忽略）：立体匹配依赖纹理，糊了必然失败
+                if n_processed % 10 == 1:
+                    sharpness = frame_sharpness(last_left)
+                    if sharpness < 30 and not sharp_warned:
+                        sharp_warned = True
+                        print("  " + "!" * 76)
+                        print(f"  [图像质量警告] 画面清晰度过低：拉普拉斯方差 = {sharpness:.1f}（正常清晰画面应 > 100）")
+                        print("                 立体匹配（FFS 与经典算法都一样）依赖清晰纹理，过糊会导致视差失效。")
+                        print("                 请依次检查：① 镜头保护膜是否已撕掉；② 镜头可否手动对焦（转到最清晰）；")
+                        print("                 ③ 光照是否充足；④ 是否离被摄物太近（定焦镜头一般在 0.3m~∞ 才清晰）。")
+                        print("  " + "!" * 76)
 
             if last_disp is None or last_left is None:
                 print("[错误] 还没有任何视差结果，退出")
@@ -418,7 +432,8 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 f"({1000.0 / avg_infer:.1f} fps) | end-to-end {e2e_fps:.2f} fps | frames {n_processed}",
                 f"model input {last_disp.shape[1]}x{last_disp.shape[0]} (scale={out['scale']}) | "
                 f"valid disparity {valid_ratio:.1f}% | display range {lo:.1f}..{hi:.1f} px",
-                f"max_disp={est.max_disp} valid_iters={est.valid_iters} | "
+                f"max_disp={est.max_disp} valid_iters={est.valid_iters} | sharpness {sharpness:.0f} "
+                f"({'OK' if sharpness >= 30 else 'TOO BLURRY'}) | "
                 f"UNCALIBRATED: no intrinsics, no rectification - NOT for measurement",
             ]
 
@@ -630,6 +645,8 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     builder: Optional[PointCloudBuilder] = None
     vis = None
     pcd = None
+    last_pcd = None
+    vis_added = False
     out_root = os.path.join(cfg["project"]["output_dir"], "captures")
     paused = False
     saved = 0
@@ -679,7 +696,17 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 rec_infer_ms.append(out["timings_ms"]["infer"])
                 if len(rec_infer_ms) > 30:
                     rec_infer_ms.pop(0)
-
+                # 清晰度检查（点云模式）：与视差模式同样的道理，画面过糊则视差失效
+                if n_processed % 10 == 1:
+                    sharpness = frame_sharpness(pair.left)
+                    if sharpness < 30 and not sharp_warned:
+                        sharp_warned = True
+                        print("  " + "!" * 76)
+                        print(f"  [图像质量警告] 画面清晰度过低：拉普拉斯方差 = {sharpness:.1f}（正常清晰画面应 > 100）")
+                        print("                 立体匹配依赖清晰纹理，过糊会导致视差与点云都不可靠。")
+                        print("                 请依次检查：① 镜头保护膜是否已撕掉；② 镜头可否手动对焦；")
+                        print("                 ③ 光照是否充足；④ 是否离被摄物太近（定焦一般 0.3m~∞ 才清晰）。")
+                        print("  " + "!" * 76)
                 # 视差是"模型分辨率"下的像素：内参必须同比例缩放，否则深度整体错倍数
                 scale = float(out["scale"])
                 params_model = params_full.scaled(scale)
@@ -702,12 +729,23 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                         "stats": st, "pc_stats": pc_stats, "infer_ms": out["timings_ms"]["infer"],
                         "pc_ms": pc_ms}
 
-                # Open3D：复用几何体；若因体素下采样换了新对象，则重新挂载
+                # Open3D：复用几何体；点云为空时不要更新（否则每帧都会刷
+                # "The number of points is 0 when creating axis-aligned bounding box"）
                 if vis is not None:
-                    vis.add_geometry(pcd)
-                    if not last.get("vis_added"):
-                        last["vis_added"] = True
-                    vis.update_geometry(pcd)
+                    if pcd is not last_pcd:
+                        if last_pcd is not None and vis_added:
+                            vis.remove_geometry(last_pcd)
+                        vis.add_geometry(pcd)
+                        vis_added = True
+                        last_pcd = pcd
+                    if pc_stats["points"] > 0:
+                        vis.update_geometry(pcd)
+                    elif n_processed % 30 == 1:
+                        # 空点云时给出可操作的诊断，而不是让用户看 Open3D 的警告刷屏
+                        print(f"  [点云为空] 本帧 {pc_stats['filtered_points']} 个点全部被深度范围过滤掉了：")
+                        print(f"             实测中位深度 = {st['median_m']:.3f} m，而 pointcloud.zmin_m = {zmin_m} m")
+                        print(f"             处理办法：①把相机对准 0.3~3 m 的场景（别贴太近）；"
+                              f"②或临时调低范围，例如 --zmin 0.05")
                     if not vis.poll_events():
                         print("  点云窗口已关闭，退出")
                         break
