@@ -102,9 +102,16 @@ python main.py --mode depth
 REM ③ 更快的视差预设（分辨率减半，约 2 倍速）
 python main.py --mode depth --scale 0.5 --valid-iters 4
 
-REM ④ 无窗口自检（跑 N 帧后自动退出，便于自动化验证）
+REM ④ 实时点云（阶段 4）：OpenCV 窗口显示 左图|右图|深度(米)，Open3D 窗口显示彩色点云
+python main.py --mode pointcloud
+python main.py --mode pointcloud --scale 0.5 --valid-iters 4     REM 更快预设
+python main.py --mode pointcloud --zmin 0.3 --zmax 2.0           REM 调整深度范围
+python main.py --mode pointcloud --voxel 0.005                   REM 启用体素下采样
+
+REM ⑤ 无窗口自检（跑 N 帧后自动退出，便于自动化验证）
 python main.py --no-display --max-frames 4
 python main.py --mode depth --no-display --max-frames 5
+python main.py --mode pointcloud --no-display --no-cloud-window --max-frames 3
 ```
 
 ### 相机诊断工具（只读，不需要管理员；部分功能需要）
@@ -144,11 +151,22 @@ python tools\run_ffs_demo.py --valid-iters 4 --max-disp 192
 | 0 | 环境 / 硬件 / 目录检查 | ✅ 完成 |
 | 1 | 项目结构 + 双摄像头采集与显示 | ✅ **完成**（实测 1280×480 / 51.6 FPS / 0 黑屏；需以管理员权限运行） |
 | 2 | 接入 FFS（官方示例图像验证） | ✅ **完成**（5/5 通过；640×480 稳态 5.35~6.40 FPS，scale 0.5 时 10.8~14.1 FPS） |
-| 3 | 实时视差图（相机 → FFS） | ⏳ **下一步** |
-| 4 | 深度图 + Open3D 实时点云 | ⏳ |
+| 3 | 实时视差图（相机 → FFS） | ✅ **完成**（4.81 FPS @640×480；16.38 FPS @scale 0.5；左右眼顺序已核实） |
+| 4 | 深度图 + Open3D 实时点云 | 🔄 代码完成并已通过交叉验证（见下）；待实机运行 |
 | 5 | 标定 / 去畸变 / 双目校正 | ⏳ |
 | 6 | 真实标定参数回归验证 | ⏳ |
 | 7 | 性能优化、稳定性、界面 | ⏳ |
+
+### 阶段 4 的验证状态（诚实说明）
+
+| 验证项 | 结果 |
+|---|---|
+| 深度公式 vs 官方实现 | ✅ **最大绝对差 0.00000000 m**（完全一致） |
+| 点云反投影 vs 官方 cloud.ply | ✅ 点数 518400 相同、z 范围 `0.3458..1.4210 m` 完全相同 |
+| PLY 导出可被 Open3D 读回 | ✅ 点数/颜色完全一致 |
+| 未标定警告写入 PLY 文件头 | ✅ `comment CALIBRATION_STATUS: UNCALIBRATED ...` |
+| 深度范围过滤 / 无效值处理 | ✅ 实测 76373 个过近点被 `zmin` 正确剔除 |
+| **实机实时点云窗口** | ⚠️ **待用户以管理员权限运行确认**（我这边无相机权限） |
 
 ## 5. 相机问题的最终结论（已解决，但属"绕过"）
 

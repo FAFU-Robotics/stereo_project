@@ -553,6 +553,279 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
 
 
 # -----------------------------------------------------------------------------
+# 阶段 4：深度图 + 实时点云（相机 -> FFS -> 深度 -> 点云）
+# -----------------------------------------------------------------------------
+def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
+    """实时点云：读相机 -> FFS 视差 -> 深度(米) -> Open3D 点云(左图着色) + 实时显示。
+
+    与阶段 3 的区别：
+        - 多出"视差 -> 深度 -> 点云"两步，需要相机内参与基线；
+        - 多开一个 Open3D 窗口显示点云（可用 --no-cloud-window 关闭，便于无人值守测试）；
+        - 深度/点云的**数值是否可信完全取决于标定状态**：
+            未标定时用占位内参 + 厂家标称基线，界面上与保存的文件里都会强制标注警告。
+
+    性能注意（需求里明确要求）：
+        - 点云对象**复用同一个**（PointCloudBuilder 内部持有），逐帧只更新点/颜色；
+        - 若启用体素下采样，open3d 会返回**新对象**，这里检测到对象变化时重新挂载几何体。
+
+    输入：cfg / args（可覆盖 ffs.scale、valid_iters、max_disp、depth 范围、点大小）
+    输出：进程退出码
+    """
+    from depth_utils import (CameraParams, colorize_depth, depth_stats,
+                             disparity_to_depth, save_depth_npy)
+    from pointcloud import PointCloudBuilder
+    from stereo_depth import FFSError, FFSDepthEstimator
+
+    # Open3D 体积大、导入慢，只在点云模式里按需导入（预览/视差模式不必付这个开销）
+    try:
+        import open3d as o3d
+    except ImportError:
+        print("[错误] 未安装 open3d，无法使用 --mode pointcloud")
+        return 5
+
+    ffs_cfg = dict(cfg.get("ffs", {}))
+    for key, attr in (("scale", "scale"), ("valid_iters", "valid_iters"), ("max_disp", "max_disp")):
+        v = getattr(args, attr, None)
+        if v is not None:
+            ffs_cfg[key] = v
+
+    pc_cfg = dict(cfg.get("pointcloud", {}))
+    if getattr(args, "zmin", None) is not None:
+        pc_cfg["zmin_m"] = float(args.zmin)
+    if getattr(args, "zmax", None) is not None:
+        pc_cfg["zmax_m"] = float(args.zmax)
+    if getattr(args, "voxel", None) is not None:
+        pc_cfg["voxel_size_m"] = float(args.voxel)
+    zmin_m = float(pc_cfg.get("zmin_m", 0.15))
+    zmax_m = float(pc_cfg.get("zmax_m", 3.0))
+
+    runtime = cfg.get("runtime", {})
+    viewer = StereoViewer(
+        window_name=str(runtime.get("window_name", "stereo_project")),
+        display_scale=float(args.display_scale if args.display_scale is not None else runtime.get("display_scale", 1.0)),
+    )
+
+    print("=" * 88)
+    print("  阶段 4：深度图 + 实时点云")
+    print("=" * 88)
+    print(f"  ffs: scale={ffs_cfg.get('scale')} valid_iters={ffs_cfg.get('valid_iters')} max_disp={ffs_cfg.get('max_disp')}")
+    print(f"  点云: z {zmin_m}..{zmax_m} m, 体素下采样 {pc_cfg.get('voxel_size_m')} m, "
+          f"点数上限 {pc_cfg.get('max_points')}, 着色={pc_cfg.get('use_color')}")
+
+    est = FFSDepthEstimator(cfg["project"], ffs_cfg)
+    ok, msg = est.weights_ready()
+    print(f"  [权重] {msg}")
+    if not ok:
+        viewer.close()
+        return 3
+    try:
+        est.load()
+    except FFSError as exc:
+        print(f"[FFS 错误] {exc}")
+        viewer.close()
+        return 4
+
+    cam = StereoCamera(cfg.get("camera", {}))
+    params_full: Optional[CameraParams] = None
+    builder: Optional[PointCloudBuilder] = None
+    vis = None
+    pcd = None
+    out_root = os.path.join(cfg["project"]["output_dir"], "captures")
+    paused = False
+    saved = 0
+    n_processed = 0
+    rec_infer_ms: List[float] = []
+    t_loop_start = time.perf_counter()
+    last = {}
+
+    try:
+        cam.open()
+        print(f"  相机已打开: {cam.describe()}  单眼 {cam.eye_size[0]}x{cam.eye_size[1]}")
+        params_full = CameraParams.from_config(cfg, eye_size=cam.eye_size)
+        print(f"  相机参数: {params_full.describe()}")
+        if not params_full.calibrated:
+            print("  " + "!" * 76)
+            print("  [严重警告] 当前【未标定】：使用占位内参 + 厂家标称基线。")
+            print("             由此产生的深度与点云【不具备测量意义】，不能测距/测尺寸/定位。")
+            print("  " + "!" * 76)
+        builder = PointCloudBuilder(pc_cfg, calibrated=params_full.calibrated)
+
+        first = cam.read()
+        print("  用真实相机画面预热模型…")
+        est.warmup(est.warmup_iters, left=first.left, right=first.right)
+
+        if not args.no_cloud_window:
+            vis = o3d.visualization.Visualizer()
+            vis.create_window(window_name="stereo_project point cloud" +
+                              ("" if params_full.calibrated else "  [UNCALIBRATED]"),
+                              width=int(args.cloud_window), height=int(args.cloud_window))
+            opt = vis.get_render_option()
+            opt.point_size = float(args.point_size)
+            opt.background_color = np.array([0.08, 0.08, 0.10])
+            print("  Open3D 点云窗口已打开（关闭窗口或按 q 退出）")
+
+        while True:
+            if not paused:
+                try:
+                    pair = cam.read()
+                except CameraReadError as exc:
+                    print(f"[读取错误] {exc}")
+                    break
+                try:
+                    out = est.infer(pair.left, pair.right)
+                except FFSError as exc:
+                    print(f"[FFS 错误] {exc}")
+                    break
+                rec_infer_ms.append(out["timings_ms"]["infer"])
+                if len(rec_infer_ms) > 30:
+                    rec_infer_ms.pop(0)
+
+                # 视差是"模型分辨率"下的像素：内参必须同比例缩放，否则深度整体错倍数
+                scale = float(out["scale"])
+                params_model = params_full.scaled(scale)
+                # 一致性自检：模型分辨率必须与视差图尺寸吻合。
+                # 这一步能挡住"scale 算反/忘记缩放"这类隐蔽错误（实测踩过：焦距错 4 倍）。
+                consist = (params_model.width == out["disp"].shape[1]
+                           and params_model.height == out["disp"].shape[0])
+                if not consist and n_processed == 0:
+                    print(f"  [警告] 内参分辨率 {params_model.width}x{params_model.height} 与视差尺寸 "
+                          f"{out['disp'].shape[1]}x{out['disp'].shape[0]} 不一致，深度可能整体错倍数！")
+                depth, valid = disparity_to_depth(out["disp"], params_model)
+                st = depth_stats(depth, valid)
+                t_pc0 = time.perf_counter()
+                pcd, pc_stats = builder.build(depth, params_model, out["left_model_rgb"])
+                pc_ms = (time.perf_counter() - t_pc0) * 1000.0
+                n_processed += 1
+                last = {"left": pair.left, "right": pair.right, "disp": out["disp"],
+                        "depth": depth, "valid": valid, "params": params_model,
+                        "left_model_rgb": out["left_model_rgb"], "scale": scale,
+                        "stats": st, "pc_stats": pc_stats, "infer_ms": out["timings_ms"]["infer"],
+                        "pc_ms": pc_ms}
+
+                # Open3D：复用几何体；若因体素下采样换了新对象，则重新挂载
+                if vis is not None:
+                    vis.add_geometry(pcd)
+                    if not last.get("vis_added"):
+                        last["vis_added"] = True
+                    vis.update_geometry(pcd)
+                    if not vis.poll_events():
+                        print("  点云窗口已关闭，退出")
+                        break
+                    vis.update_renderer()
+
+            if not last:
+                print("[错误] 还没有任何结果，退出")
+                break
+
+            # ---- 显示：左图 | 右图 | 深度伪彩 ----
+            depth_vis = colorize_depth(last["depth"], last["valid"], zmin_m, zmax_m)
+            warn = np.zeros((28, depth_vis.shape[1], 3), dtype=np.uint8)
+            StereoViewer._put_text(
+                warn,
+                ("UNCALIBRATED - no metric depth" if not params_full.calibrated else "CALIBRATED"),
+                (6, 20), (0, 220, 255) if not params_full.calibrated else (0, 255, 0), 0.5, 1, shadow=False)
+            depth_panel = np.vstack([depth_vis, warn])
+
+            elapsed = max(time.perf_counter() - t_loop_start, 1e-9)
+            e2e = n_processed / elapsed
+            avg_infer = float(np.mean(rec_infer_ms)) if rec_infer_ms else 0.0
+            st = last["stats"]
+            status = [
+                f"capture {cam.stats['measured_fps']:.1f} fps | ffs {avg_infer:.0f} ms "
+                f"| cloud {last['pc_ms']:.0f} ms | end-to-end {e2e:.2f} fps | frames {n_processed}",
+                f"depth valid {st['valid_ratio']:.1f}% | median {st['median_m']:.3f} m | "
+                f"range {zmin_m}..{zmax_m} m | points {last['pc_stats']['points']}",
+                f"intrinsics: {'CALIBRATED' if params_full.calibrated else 'UNCALIBRATED (placeholder fx='
+                              f'{params_full.fx:.0f}, baseline={params_full.baseline_m:.3f}m)'}"
+                f" | scale={last['scale']} valid_iters={est.valid_iters}",
+            ]
+
+            if args.no_display:
+                if n_processed % 5 == 0 or n_processed == 1:
+                    print(f"  [帧 {n_processed}] " + " | ".join(status[:2]))
+                key = -1
+            else:
+                panels = [
+                    ("LEFT (raw, unrectified)", last["left"], [f"{last['left'].shape[1]}x{last['left'].shape[0]}"]),
+                    ("RIGHT (raw, unrectified)", last["right"], [f"{last['right'].shape[1]}x{last['right'].shape[0]}"]),
+                    (f"DEPTH (m, {zmin_m}..{zmax_m})", depth_panel, []),
+                ]
+                key = viewer.show_panels(panels, status_lines=status, paused=paused)
+
+            if not args.no_display:
+                if StereoViewer.is_quit(key):
+                    print("  收到退出按键，正在释放资源…")
+                    break
+                if StereoViewer.is_pause(key):
+                    paused = not paused
+                    print(f"  {'已暂停' if paused else '已恢复'}")
+                if StereoViewer.is_help(key):
+                    viewer.toggle_help()
+                if StereoViewer.is_info(key):
+                    print(f"  [状态] {est.info()}")
+                    print(f"         相机 {cam.describe()} stats={cam.stats}")
+                    print(f"         点云 {last['pc_stats']}  深度 {last['stats']}")
+                    print(f"         参数 {params_full.describe()}")
+                if StereoViewer.is_snapshot(key):
+                    d = make_session_dir(out_root, "cloud")
+                    files = save_frame_pair(last["left"], last["right"], d, cfg,
+                                            note="阶段 4 深度+点云保存")
+                    p = os.path.join(d, "disparity.npy"); np.save(p, last["disp"]); files.append(p)
+                    p = save_depth_npy(last["depth"], d, last["params"],
+                                       extra={"scale": last["scale"], "valid_iters": est.valid_iters,
+                                              "max_disp": est.max_disp, "有效深度比例": f"{last['stats']['valid_ratio']:.2f}%"})
+                    files.append(p)
+                    cv2.imwrite(os.path.join(d, "depth_vis.png"), depth_vis)
+                    files.append(os.path.join(d, "depth_vis.png"))
+                    # 点云：为保存单独 clone 一份（避免与实时对象互相影响）
+                    ply = builder.save_ply(o3d.geometry.PointCloud(pcd), d, last["params"],
+                                           extra={"scale": last["scale"], "valid_iters": est.valid_iters,
+                                                  "max_disp": est.max_disp,
+                                                  "points": last["pc_stats"]["points"]})
+                    files.append(ply)
+                    saved += 1
+                    print(f"  已保存 {len(files)} 个文件到：{d}")
+
+            if args.max_frames and n_processed >= args.max_frames:
+                print(f"  已达 --max-frames={args.max_frames}，自动退出")
+                break
+            if args.duration and (time.perf_counter() - t_loop_start) >= args.duration:
+                print(f"  已达 --duration={args.duration}s，自动退出")
+                break
+
+    except CameraError as exc:
+        print(f"[相机错误] {exc}")
+        return 2
+    except KeyboardInterrupt:
+        print("\n  收到 Ctrl+C，正在释放资源…")
+    finally:
+        cam.close()
+        est.close()
+        viewer.close()
+        if vis is not None:
+            try:
+                vis.destroy_window()
+            except Exception:
+                pass
+
+    dt = max(time.perf_counter() - t_loop_start, 1e-9)
+    print("-" * 88)
+    print("  运行结束")
+    print(f"  处理帧数        : {n_processed}")
+    print(f"  端到端帧率      : {n_processed / dt:.2f} FPS（采集+推理+深度+点云+显示）")
+    print(f"  采集帧率        : {cam.stats['measured_fps']:.2f} FPS")
+    if rec_infer_ms:
+        print(f"  最近推理耗时    : 平均 {np.mean(rec_infer_ms):.1f} ms")
+    if last:
+        print(f"  最后一次深度    : 有效 {last['stats']['valid_ratio']:.1f}% 中位 {last['stats']['median_m']:.3f} m")
+        print(f"  最后一次点云    : {last['pc_stats']['points']} 点（构建 {last['pc_ms']:.0f} ms）")
+    print(f"  标定状态        : {'已标定' if (params_full and params_full.calibrated) else '未标定（占位参数，禁止测量）'}")
+    print(f"  读取失败/全黑/无信号 : {cam.stats['read_fail']} / {cam.stats['blank_frames']} / {cam.stats['no_signal_frames']}")
+    print(f"  保存次数        : {saved}")
+    return 0
+
+
+# -----------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="stereo_project —— 双目视觉系统")
     p.add_argument("--config", default=os.path.join(PROJECT_ROOT, "config.yaml"), help="配置文件路径")
@@ -568,6 +841,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scale", type=float, default=None, help="覆盖 ffs.scale（0.5 可明显提速）")
     p.add_argument("--valid-iters", type=int, default=None, help="覆盖 ffs.valid_iters")
     p.add_argument("--max-disp", type=int, default=None, help="覆盖 ffs.max_disp")
+    # 阶段 4：点云相关
+    p.add_argument("--zmin", type=float, default=None, help="覆盖 pointcloud.zmin_m（米）")
+    p.add_argument("--zmax", type=float, default=None, help="覆盖 pointcloud.zmax_m（米）")
+    p.add_argument("--voxel", type=float, default=None, help="覆盖 pointcloud.voxel_size_m（0=不下采样）")
+    p.add_argument("--point-size", type=float, default=2.0, help="Open3D 点云显示点大小")
+    p.add_argument("--cloud-window", type=int, default=900, help="Open3D 点云窗口边长（像素）")
+    p.add_argument("--no-cloud-window", action="store_true", help="不打开 Open3D 窗口（便于无人值守测试）")
     return p
 
 
@@ -586,8 +866,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_preview(cfg, args)
     if args.mode == "depth":
         return run_depth(cfg, args)
-
-    print(f"[未实现] --mode {args.mode} 将在阶段 4 实现（Open3D 实时点云）")
+    if args.mode == "pointcloud":
+        return run_pointcloud(cfg, args)
+    print(f"[未实现] --mode {args.mode}")
     return 1
 
 

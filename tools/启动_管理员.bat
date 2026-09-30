@@ -79,31 +79,53 @@ echo ============================================================
 echo   [1] Live stereo preview            (main.py --mode preview)
 echo   [2] Live disparity  [stage 3]      (main.py --mode depth)
 echo   [3] Live disparity, faster preset  (--scale 0.5 --valid-iters 4)
-echo   [4] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
-echo   [5] DirectShow capture test        (pygrabber, no OpenCV)
-echo   [6] OpenCV capture test            (saves a snapshot)
+echo   [4] Live point cloud [stage 4]     (main.py --mode pointcloud)
+echo   [5] Live point cloud, faster       (--scale 0.5 --valid-iters 4)
+echo   [6] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
+echo   [7] DirectShow capture test        (pygrabber, no OpenCV)
+echo   [8] OpenCV capture test            (saves a snapshot)
 echo   [0] Exit
 echo ============================================================
 set "DO="
-set /p "CH=Type 1, 2, 3, 4, 5, 6 or 0 then press Enter: "
+set /p "CH=Type 1..8 or 0 then press Enter: "
 if "%CH%"=="1" set "DO=PREVIEW"
 if "%CH%"=="2" set "DO=DEPTH"
 if "%CH%"=="3" set "DO=DEPTHFAST"
-if "%CH%"=="4" set "DO=DEPTHSAVE"
-if "%CH%"=="5" set "DO=DSTEST"
-if "%CH%"=="6" set "DO=CVTEST"
+if "%CH%"=="4" set "DO=CLOUD"
+if "%CH%"=="5" set "DO=CLOUDFAST"
+if "%CH%"=="6" set "DO=DEPTHSAVE"
+if "%CH%"=="7" set "DO=DSTEST"
+if "%CH%"=="8" set "DO=CVTEST"
 if "%CH%"=="0" set "DO=EXIT"
 if not defined DO goto menu
 if /i "%DO%"=="EXIT" goto done
 if /i "%DO%"=="PREVIEW"   call :do_preview
 if /i "%DO%"=="DEPTH"     call :do_depth
 if /i "%DO%"=="DEPTHFAST" call :do_depth_fast
+if /i "%DO%"=="CLOUD"     call :do_cloud
+if /i "%DO%"=="CLOUDFAST" call :do_cloud_fast
 if /i "%DO%"=="DEPTHSAVE" call :do_depth_save
 if /i "%DO%"=="CVTEST"    call :do_cvtest
 if /i "%DO%"=="DSTEST"    call :do_dstest
 echo.
 pause
 goto menu
+
+:do_cloud
+echo.
+echo --- live point cloud, STAGE 4 ---
+echo     OpenCV window : left / right / depth (metres)
+echo     Open3D window : coloured point cloud (left image colours)
+echo     Keys: q or ESC = quit, p = pause, s = save (PLY + depth + images), i = info
+echo     NOTE: while uncalibrated the cloud is NOT metric (placeholder intrinsics).
+"%PY%" main.py --mode pointcloud
+exit /b
+
+:do_cloud_fast
+echo.
+echo --- live point cloud, FASTER preset (scale 0.5 + valid_iters 4) ---
+"%PY%" main.py --mode pointcloud --scale 0.5 --valid-iters 4
+exit /b
 
 :do_preview
 echo.

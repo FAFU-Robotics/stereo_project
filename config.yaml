@@ -130,7 +130,12 @@ ffs:
 pointcloud:
   zmin_m: 0.15             # 与 depth.zmin_m 独立，便于单独调点云范围
   zmax_m: 3.00
-  voxel_size_m: 0.005      # 体素下采样边长；0 = 不下采样
+  # 体素下采样边长；0 = 不下采样。
+  # 【为什么实时默认关掉】实测：对 51.8 万点做 5mm 体素下采样需要约 59 ms，
+  #   在实时循环里会明显拖慢帧率（FFS 推理本身才 43~157 ms）。
+  #   实时显示靠下面的 max_points 做保护即可；需要下采样时用命令行开启，例如：
+  #       python main.py --mode pointcloud --voxel 0.005
+  voxel_size_m: 0.0
   use_color: true          # 用左图 RGB 给点云着色
   color_source: left
   max_points: 400000       # 上采样上限保护，防止点数爆炸拖垮显示
