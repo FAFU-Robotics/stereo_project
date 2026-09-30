@@ -457,6 +457,30 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     p2 = os.path.join(d, "disparity_vis.png")
                     cv2.imwrite(p2, disp_vis)
                     files.append(p2)
+                    # 视差参数必须和视差数据成套保存：
+                    #   阶段 4 用 depth = fx*scale * baseline / disp 换算深度时，
+                    #   必须知道 scale 与模型输入尺寸，否则深度会整体错一个倍数。
+                    p3 = os.path.join(d, "disp_meta.txt")
+                    with open(p3, "w", encoding="utf-8") as fh:
+                        fh.write("\n".join([
+                            "# 视差数据参数说明（与 disparity.npy 配套，缺一不可）",
+                            f"保存时间        : {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                            f"视差数组形状    : {last_disp.shape[1]}x{last_disp.shape[0]}（模型输入分辨率，不是原图）",
+                            f"视差单位        : 像素（**模型输入分辨率下**的像素）",
+                            f"ffs.scale       : {out['scale']}   <-- 换算到原图必须乘这个系数",
+                            f"原图单眼尺寸    : {last_left.shape[1]}x{last_left.shape[0]}",
+                            f"换算关系        : 原图视差 = 本视差 × {1.0 / out['scale'] if out['scale'] else 0:.4g}",
+                            f"valid_iters     : {est.valid_iters}",
+                            f"max_disp        : {est.max_disp}（模型像素；超过此值时视差不可信）",
+                            f"build_volume    : {est.build_volume}",
+                            f"有效视差比例    : {valid_ratio:.2f}%",
+                            f"推理耗时        : {out['timings_ms']['infer']:.1f} ms",
+                            f"端到端帧率      : {e2e_fps:.2f} FPS",
+                            "",
+                            "⚠️ 未标定：无内参、无畸变参数、无校正映射。",
+                            "   用这些数据算出的深度/点云**不具备测量意义**。",
+                        ]) + "\n")
+                    files.append(p3)
                     saved += 1
                     print(f"  已保存 {len(files)} 个文件到：{d}")
 
