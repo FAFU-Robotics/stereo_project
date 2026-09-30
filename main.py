@@ -305,17 +305,208 @@ def run_preview(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
 
 
 # -----------------------------------------------------------------------------
+# 阶段 3：实时视差（相机 -> FFS -> 视差伪彩显示）
+# -----------------------------------------------------------------------------
+def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
+    """实时双目视差：读相机 -> FFS 推理 -> 显示 左图|右图|视差伪彩 + 状态。
+
+    设计要点（都来自前几个阶段实测得到的教训）：
+        1) 模型只加载一次，**用真实相机画面预热**（预热尺寸必须与正式输入一致，
+           否则第一次正式推理仍会冷启动，实测 2088ms vs 270ms）；
+        2) 不排队、不堆积：每轮都读"最新一帧"，推理慢了自然丢帧，不会无限积压；
+        3) 视差伪彩用百分位 + EMA 平滑（见 viewer.DisparityColorizer），实时不闪；
+        4) 画面上必须明确标注"未标定，仅流程验证"——因为此时既没有内参也没有校正。
+
+    输入：cfg（完整配置）、args（命令行参数，可覆盖 ffs.scale/valid_iters/max_disp）
+    输出：进程退出码
+    """
+    from stereo_depth import FFSError, FFSDepthEstimator
+    from viewer import DisparityColorizer
+
+    ffs_cfg = dict(cfg.get("ffs", {}))
+    if getattr(args, "scale", None) is not None:
+        ffs_cfg["scale"] = float(args.scale)
+    if getattr(args, "valid_iters", None) is not None:
+        ffs_cfg["valid_iters"] = int(args.valid_iters)
+    if getattr(args, "max_disp", None) is not None:
+        ffs_cfg["max_disp"] = int(args.max_disp)
+
+    runtime = cfg.get("runtime", {})
+    viewer = StereoViewer(
+        window_name=str(runtime.get("window_name", "stereo_project")),
+        display_scale=float(args.display_scale if args.display_scale is not None else runtime.get("display_scale", 1.0)),
+    )
+    colorizer = DisparityColorizer()
+
+    print("=" * 88)
+    print("  阶段 3：实时视差（FFS）")
+    print("=" * 88)
+    print(f"  ffs.scale={ffs_cfg.get('scale')}  valid_iters={ffs_cfg.get('valid_iters')}  "
+          f"max_disp={ffs_cfg.get('max_disp')}  build_volume={ffs_cfg.get('build_volume')}")
+    print("  [警告] 当前未标定：视差仅用于流程验证，**不具备测量意义**（不能测距/测尺寸/定位）")
+
+    est = FFSDepthEstimator(cfg["project"], ffs_cfg)
+    ok, msg = est.weights_ready()
+    print(f"  [权重] {msg}")
+    if not ok:
+        viewer.close()
+        return 3
+    try:
+        est.load()
+    except FFSError as exc:
+        print(f"[FFS 错误] {exc}")
+        viewer.close()
+        return 4
+
+    cam = StereoCamera(cfg.get("camera", {}))
+    out_root = os.path.join(cfg["project"]["output_dir"], "captures")
+    paused = False
+    saved = 0
+    last_left = last_right = None
+    last_disp = None
+    t_loop_start = time.perf_counter()
+    n_processed = 0
+    rec_infer_ms: List[float] = []
+
+    try:
+        cam.open()
+        print(f"  相机已打开: {cam.describe()}  单眼 {cam.eye_size[0]}x{cam.eye_size[1]}")
+
+        # 预热：必须用真实相机画面（尺寸要与正式推理一致）
+        first = cam.read()
+        last_left, last_right = first.left, first.right
+        print("  用真实相机画面预热模型（第一次会比较慢）…")
+        est.warmup(est.warmup_iters, left=last_left, right=last_right)
+
+        while True:
+            if not paused:
+                try:
+                    pair = cam.read()          # 永远只取最新帧，不做队列堆积
+                except CameraReadError as exc:
+                    print(f"[读取错误] {exc}")
+                    break
+                last_left, last_right = pair.left, pair.right
+                try:
+                    out = est.infer(last_left, last_right)
+                except FFSError as exc:
+                    print(f"[FFS 错误] {exc}")
+                    break
+                last_disp = out["disp"]
+                n_processed += 1
+                rec_infer_ms.append(out["timings_ms"]["infer"])
+                if len(rec_infer_ms) > 30:
+                    rec_infer_ms.pop(0)
+
+            if last_disp is None or last_left is None:
+                print("[错误] 还没有任何视差结果，退出")
+                break
+
+            disp_vis, (lo, hi) = colorizer.colorize(last_disp)
+            # 未标定警告直接画在视差面板下方（ASCII，cv2 画不了中文）
+            warn = np.zeros((28, disp_vis.shape[1], 3), dtype=np.uint8)
+            StereoViewer._put_text(warn, "UNCALIBRATED - process validation only", (6, 20), (0, 220, 255), 0.5, 1, shadow=False)
+            disp_panel = np.vstack([disp_vis, warn])
+
+            elapsed = max(time.perf_counter() - t_loop_start, 1e-9)
+            e2e_fps = n_processed / elapsed
+            avg_infer = float(np.mean(rec_infer_ms)) if rec_infer_ms else 0.0
+            valid_ratio = float((last_disp > 0).mean()) * 100.0
+
+            status = [
+                f"capture {cam.stats['measured_fps']:.1f} fps | ffs {avg_infer:.0f} ms "
+                f"({1000.0 / avg_infer:.1f} fps) | end-to-end {e2e_fps:.2f} fps | frames {n_processed}",
+                f"model input {last_disp.shape[1]}x{last_disp.shape[0]} (scale={out['scale']}) | "
+                f"valid disparity {valid_ratio:.1f}% | display range {lo:.1f}..{hi:.1f} px",
+                f"max_disp={est.max_disp} valid_iters={est.valid_iters} | "
+                f"UNCALIBRATED: no intrinsics, no rectification - NOT for measurement",
+            ]
+
+            if args.no_display:
+                if n_processed % 5 == 0 or n_processed == 1:
+                    print(f"  [帧 {n_processed}] " + " | ".join(status[:2]))
+                key = -1
+            else:
+                panels = [
+                    ("LEFT (raw, unrectified)", last_left, [f"{last_left.shape[1]}x{last_left.shape[0]}"]),
+                    ("RIGHT (raw, unrectified)", last_right, [f"{last_right.shape[1]}x{last_right.shape[0]}"]),
+                    ("DISPARITY (px, uncalibrated)", disp_panel, []),
+                ]
+                key = viewer.show_panels(panels, status_lines=status, paused=paused)
+
+            if not args.no_display:
+                if StereoViewer.is_quit(key):
+                    print("  收到退出按键，正在释放相机与模型…")
+                    break
+                if StereoViewer.is_pause(key):
+                    paused = not paused
+                    print(f"  {'已暂停' if paused else '已恢复'}")
+                    if not paused:
+                        colorizer.reset()
+                if StereoViewer.is_help(key):
+                    viewer.toggle_help()
+                if StereoViewer.is_info(key):
+                    print(f"  [状态] {est.info()}")
+                    print(f"         相机 {cam.describe()} stats={cam.stats}")
+                if StereoViewer.is_snapshot(key):
+                    d = make_session_dir(out_root, "capture")
+                    files = save_frame_pair(last_left, last_right, d, cfg, note="阶段 3 实时视差保存")
+                    p = os.path.join(d, "disparity.npy")
+                    np.save(p, last_disp)
+                    files.append(p)
+                    p2 = os.path.join(d, "disparity_vis.png")
+                    cv2.imwrite(p2, disp_vis)
+                    files.append(p2)
+                    saved += 1
+                    print(f"  已保存 {len(files)} 个文件到：{d}")
+
+            if args.max_frames and n_processed >= args.max_frames:
+                print(f"  已达 --max-frames={args.max_frames}，自动退出")
+                break
+            if args.duration and (time.perf_counter() - t_loop_start) >= args.duration:
+                print(f"  已达 --duration={args.duration}s，自动退出")
+                break
+
+    except CameraError as exc:
+        print(f"[相机错误] {exc}")
+        return 2
+    except KeyboardInterrupt:
+        print("\n  收到 Ctrl+C，正在释放资源…")
+    finally:
+        cam.close()
+        est.close()
+        viewer.close()
+
+    dt = max(time.perf_counter() - t_loop_start, 1e-9)
+    print("-" * 88)
+    print("  运行结束")
+    print(f"  处理帧数        : {n_processed}")
+    print(f"  端到端帧率      : {n_processed / dt:.2f} FPS（采集+推理+显示）")
+    print(f"  采集帧率        : {cam.stats['measured_fps']:.2f} FPS")
+    if rec_infer_ms:
+        print(f"  最近推理耗时    : 平均 {np.mean(rec_infer_ms):.1f} ms（约 {1000.0 / np.mean(rec_infer_ms):.1f} FPS）")
+    print(f"  丢弃帧数(估算)  : {max(cam.stats['frames'] - n_processed, 0)}（推理比采集慢，只保留最新帧）")
+    print(f"  读取失败 / 全黑 / 无信号 : {cam.stats['read_fail']} / {cam.stats['blank_frames']} / {cam.stats['no_signal_frames']}")
+    print(f"  保存次数        : {saved}")
+    print("  相机与模型已释放。")
+    return 0
+
+
+# -----------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="stereo_project —— 双目视觉系统（阶段 1：采集与预览）")
+    p = argparse.ArgumentParser(description="stereo_project —— 双目视觉系统")
     p.add_argument("--config", default=os.path.join(PROJECT_ROOT, "config.yaml"), help="配置文件路径")
     p.add_argument("--mode", default="preview", choices=["preview", "depth", "pointcloud"],
-                   help="运行模式；depth/pointcloud 将在后续阶段实现")
+                   help="preview=实时双目预览(阶段1)  depth=实时视差(阶段3)  pointcloud=点云(阶段4)")
     p.add_argument("--list", action="store_true", help="只列出相机设备信息后退出")
     p.add_argument("--no-display", action="store_true", help="不开窗口（用于自动化测试）")
     p.add_argument("--max-frames", type=int, default=0, help="跑满 N 帧后自动退出（0=不限制）")
     p.add_argument("--duration", type=float, default=0.0, help="运行 N 秒后自动退出（0=不限制）")
     p.add_argument("--save-snapshot", action="store_true", help="运行中保存一次左右原始图像")
     p.add_argument("--display-scale", type=float, default=None, help="显示缩放系数（覆盖配置）")
+    # 阶段 3：FFS 参数临时覆盖（不改配置文件）
+    p.add_argument("--scale", type=float, default=None, help="覆盖 ffs.scale（0.5 可明显提速）")
+    p.add_argument("--valid-iters", type=int, default=None, help="覆盖 ffs.valid_iters")
+    p.add_argument("--max-disp", type=int, default=None, help="覆盖 ffs.max_disp")
     return p
 
 
@@ -330,13 +521,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.list:
         return run_list(cfg)
 
-    if args.mode != "preview":
-        print(f"[未实现] --mode {args.mode} 将在后续阶段实现：")
-        print("         depth      -> 阶段 3（接入 FFS 视差/深度）")
-        print("         pointcloud -> 阶段 4（Open3D 实时点云）")
-        return 1
+    if args.mode == "preview":
+        return run_preview(cfg, args)
+    if args.mode == "depth":
+        return run_depth(cfg, args)
 
-    return run_preview(cfg, args)
+    print(f"[未实现] --mode {args.mode} 将在阶段 4 实现（Open3D 实时点云）")
+    return 1
 
 
 if __name__ == "__main__":

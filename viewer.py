@@ -32,6 +32,74 @@ KEY_INFO = (ord("i"),)             # i：打印详细信息（控制台）
 KEY_HELP = (ord("h"),)             # h：显示/隐藏帮助
 
 
+class DisparityColorizer:
+    """把视差图（float，单位：像素）变成稳定的伪彩图，用于实时显示。
+
+    为什么不用"整幅 min/max"：
+        实时视频里只要有一两个异常像素，min/max 就会剧烈跳变 → 画面颜色整体闪烁。
+        这里改用【百分位裁剪 + 指数滑动平均(EMA)】：
+            - 百分位（默认 2%~98%）忽略极端离群像素；
+            - EMA 让显示范围随时间缓慢变化，颜色稳定不闪。
+    无效像素（<=0 或非有限值）统一涂黑，一眼看出"这里没有有效视差"。
+
+    输入：
+        disp  : np.ndarray (H,W)，float，单位像素
+        valid : 可选 bool 数组，True=有效；默认用 disp > 0
+    输出：
+        (bgr_uint8 (H,W,3), (lo, hi)) —— 同时返回当前显示范围，便于打印到状态栏
+    """
+
+    def __init__(
+        self,
+        colormap: int = cv2.COLORMAP_TURBO,
+        percentile: Tuple[float, float] = (2.0, 98.0),
+        ema_alpha: float = 0.25,
+        invalid_color: Tuple[int, int, int] = (0, 0, 0),
+    ) -> None:
+        self.colormap = colormap
+        self.percentile = percentile
+        self.ema_alpha = float(ema_alpha)
+        self.invalid_color = invalid_color
+        self._lo: Optional[float] = None
+        self._hi: Optional[float] = None
+
+    def reset(self) -> None:
+        """清空平滑状态（暂停恢复后、或换了场景时可调用）。"""
+        self._lo = None
+        self._hi = None
+
+    def colorize(self, disp: np.ndarray, valid: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Tuple[float, float]]:
+        d = np.asarray(disp, dtype=np.float32)
+        if d.ndim != 2:
+            raise ValueError(f"视差图必须是 2D，当前形状 {d.shape}")
+        if valid is None:
+            valid = np.isfinite(d) & (d > 0)
+        else:
+            valid = np.asarray(valid, dtype=bool) & np.isfinite(d)
+
+        out = np.zeros((d.shape[0], d.shape[1], 3), dtype=np.uint8)
+        if not valid.any():
+            return out, (0.0, 0.0)
+
+        lo, hi = np.percentile(d[valid], self.percentile)
+        lo, hi = float(lo), float(hi)
+        if hi - lo < 1e-6:
+            hi = lo + 1e-6
+        if self._lo is None:
+            self._lo, self._hi = lo, hi
+        else:
+            a = self.ema_alpha
+            self._lo = (1 - a) * self._lo + a * lo
+            self._hi = (1 - a) * self._hi + a * hi
+
+        span = max(self._hi - self._lo, 1e-6)
+        norm = np.clip((d - self._lo) / span, 0.0, 1.0) * 255.0
+        colored = cv2.applyColorMap(norm.astype(np.uint8), self.colormap)
+        out[valid] = colored[valid]
+        out[~valid] = self.invalid_color
+        return out, (self._lo, self._hi)
+
+
 class StereoViewer:
     """平铺式图像显示窗口。
 

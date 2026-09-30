@@ -82,25 +82,39 @@ stereo_project/
 
 ## 3. 运行命令
 
+> ⚠️ **所有涉及相机的命令都必须以管理员权限运行**（双击 `tools\启动_管理员.bat`，
+> 或在管理员 cmd 里执行下面的命令）。原因见第 5 节。
+
+### 阶段 1 / 3：相机预览与实时视差（需要管理员）
+
 ```bat
 cd /d D:\31931\Documents\stereo_project
 
-REM ① 看设备与索引（不设分辨率/格式，最接近驱动默认行为）
-python main.py --list
+REM ★ 最省事：双击 tools\启动_管理员.bat，然后按菜单选
+REM     [1] 实时双目预览        [2] 实时视差(FFS)     [3] 实时视差(更快预设)
 
-REM ② 完整探测：设备名、每个索引的可用分辨率/格式/帧率/是否黑屏（推荐）
-python tools\probe_cameras.py
-REM    或只探测某个索引：
-python tools\probe_cameras.py --index 2
-
-REM ③ 单路预览窗口（逐个索引试，找出哪一个是双目相机）
-python tools\preview_any.py --index 2
-
-REM ④ 双路实时预览（q/ESC 退出，p 暂停，s 保存，i 状态，h 帮助）
+REM ① 双路实时预览（q/ESC 退出，p 暂停，s 保存，i 状态，h 帮助）
 python main.py
 
-REM ⑤ 无窗口自检（用于自动化验证，跑 4 帧就退出）
+REM ② 实时视差（阶段 3）：左图 | 右图 | 视差伪彩 + 采集/推理/端到端 FPS
+python main.py --mode depth
+
+REM ③ 更快的视差预设（分辨率减半，约 2 倍速）
+python main.py --mode depth --scale 0.5 --valid-iters 4
+
+REM ④ 无窗口自检（跑 N 帧后自动退出，便于自动化验证）
 python main.py --no-display --max-frames 4
+python main.py --mode depth --no-display --max-frames 5
+```
+
+### 相机诊断工具（只读，不需要管理员；部分功能需要）
+
+```bat
+python main.py --list                                    REM 设备 + 索引快速扫描
+python tools\probe_cameras.py --index 1                  REM 逐配置探测单个索引
+python tools\preview_any.py --index 1                    REM 单路预览/自检
+python tools\dshow_capture_test.py --index 1             REM 绕开 OpenCV 的 DirectShow 抓帧诊断
+REM 或双击：tools\相机状态检查.bat / tools\相机修复_管理员.bat
 ```
 
 ### 阶段 2：FFS 官方示例验证（不需要相机）

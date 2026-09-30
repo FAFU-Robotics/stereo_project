@@ -378,17 +378,16 @@ class StereoCamera:
             cap.release()
             raise CameraError(
                 f"无法打开相机索引 {index}（{name}，后端={self.backend}）。\n"
-                "        【本机实测原因】Windows 帧服务器对**物理相机**返回 E_ACCESSDENIED(0x80070005)，\n"
-                "        而软件虚拟摄像头（HP 的 OMEN Cam & Voice，索引 2）可以打开。已排除：OpenCV 版本、\n"
-                "        沙箱权限、完整性级别、锁屏、相机隐私设置、设备故障、驱动注册损坏。\n"
-                "        时间线证据：9/29 16:04 本机 python 还能用相机；9/29 18:53 HP OMEN 助手进程启动后失效。\n"
-                "        【建议排查顺序】\n"
-                "          1) 按一下 F8 / Fn+F8（HP 摄像头隐私键），再复测；\n"
-                "          2) 打开 OMEN Gaming Hub，关闭摄像头/虚拟摄像头/背景虚化相关功能，或直接退出该软件；\n"
-                "             也可在任务管理器结束 HP.OMEN.VirtualCamHelper.exe 与 HP.OMEN.VadRedirectHelper.exe\n"
-                "             （临时操作，随软件自动重启，不修改任何设置）；\n"
-                "          3) 复测：python tools\\probe_cameras.py --index 1\n"
-                "          4) 完整证据与分析见 docs\\阶段1_相机根因分析.md"
+                "        【已确认原因】本机实测：**普通权限**的进程访问物理相机会被系统拒绝，\n"
+                "        错误码 HRESULT=0x80070005 (E_ACCESSDENIED)；而**管理员权限完全正常**\n"
+                "        （实测 1280x480 真实画面、51.6 FPS、0 黑屏、0 读取失败）。\n"
+                "        这不是相机故障，也不是 OpenCV 或本项目代码的问题。\n"
+                "        【解决办法】以管理员权限运行：\n"
+                "          双击  tools\\启动_管理员.bat  →  在 UAC 弹窗点【是】\n"
+                "        【完整证据链】docs\\阶段1_相机根因分析.md 第 12 节\n"
+                "        【已逐项排除】OpenCV 版本(4.12 与 5.0 行为一致)、设备与驱动(帧服务器多次 hr=0x0 成功)、\n"
+                "        USB 与像素格式、相机隐私设置(Allow)、组策略、沙箱与完全权限、进程完整性级别、\n"
+                "        锁屏、线程模型(STA/MTA)、qedit.dll、厂商过滤驱动、HP 用户态进程。"
             )
         if self.fourcc:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))

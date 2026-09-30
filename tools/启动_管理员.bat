@@ -76,31 +76,52 @@ echo.
 
 :menu
 echo ============================================================
-echo   [1] Start the live stereo preview      (runs main.py)
-echo   [2] Repeat the OpenCV capture test
-echo   [3] Repeat the DirectShow test         (pygrabber, no OpenCV)
+echo   [1] Live stereo preview            (main.py --mode preview)
+echo   [2] Live disparity  [stage 3]      (main.py --mode depth)
+echo   [3] Live disparity, faster preset  (--scale 0.5 --valid-iters 4)
+echo   [4] DirectShow capture test        (pygrabber, no OpenCV)
+echo   [5] OpenCV capture test            (saves a snapshot)
 echo   [0] Exit
 echo ============================================================
 set "DO="
-set /p "CH=Type 1, 2, 3 or 0 then press Enter: "
+set /p "CH=Type 1, 2, 3, 4, 5 or 0 then press Enter: "
 if "%CH%"=="1" set "DO=PREVIEW"
-if "%CH%"=="2" set "DO=CVTEST"
-if "%CH%"=="3" set "DO=DSTEST"
+if "%CH%"=="2" set "DO=DEPTH"
+if "%CH%"=="3" set "DO=DEPTHFAST"
+if "%CH%"=="4" set "DO=DSTEST"
+if "%CH%"=="5" set "DO=CVTEST"
 if "%CH%"=="0" set "DO=EXIT"
 if not defined DO goto menu
 if /i "%DO%"=="EXIT" goto done
-if /i "%DO%"=="PREVIEW" call :do_preview
-if /i "%DO%"=="CVTEST"  call :do_cvtest
-if /i "%DO%"=="DSTEST"  call :do_dstest
+if /i "%DO%"=="PREVIEW"   call :do_preview
+if /i "%DO%"=="DEPTH"     call :do_depth
+if /i "%DO%"=="DEPTHFAST" call :do_depth_fast
+if /i "%DO%"=="CVTEST"    call :do_cvtest
+if /i "%DO%"=="DSTEST"    call :do_dstest
 echo.
 pause
 goto menu
 
 :do_preview
 echo.
-echo --- starting the live stereo preview ---
-echo     Keys inside the window: q or ESC = quit, p = pause, s = save, i = info
+echo --- live stereo preview (stage 1) ---
+echo     Keys: q or ESC = quit, p = pause, s = save, i = info, h = help
 "%PY%" main.py
+exit /b
+
+:do_depth
+echo.
+echo --- live disparity, FFS (stage 3) ---
+echo     Keys: q or ESC = quit, p = pause, s = save, i = info, h = help
+echo     NOTE: uncalibrated - for process validation only, NOT for measurement
+"%PY%" main.py --mode depth
+exit /b
+
+:do_depth_fast
+echo.
+echo --- live disparity, FASTER preset: scale 0.5 + valid_iters 4 ---
+echo     (lower resolution disparity, roughly 2x faster than the default)
+"%PY%" main.py --mode depth --scale 0.5 --valid-iters 4
 exit /b
 
 :do_cvtest
