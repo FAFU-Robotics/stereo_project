@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -71,6 +72,9 @@ def list_video_devices_from_registry() -> List[Dict[str, str]]:
     except ImportError:
         return devices
 
+    # 先用 pnputil 拿到"当前真正连接"的设备集合，用来标记注册表里的历史残留
+    connected = list_connected_camera_devices()
+
     enum_root = r"SYSTEM\CurrentControlSet\Enum\USB"
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, enum_root) as usb_root:
@@ -99,6 +103,8 @@ def list_video_devices_from_registry() -> List[Dict[str, str]]:
                                     "instance_id": f"USB\\{vid_pid}\\{inst}",
                                     "friendly_name": name,
                                     "vid_pid": vid_pid.replace("VID_", "").replace("PID_", ":").replace("&", ""),
+                                    # present=False 表示"历史上插过但现在没插"（注册表残留）
+                                    "present": "是" if f"USB\\{vid_pid}\\{inst}" in connected else "否",
                                 }
                             )
                 except OSError:
@@ -106,6 +112,49 @@ def list_video_devices_from_registry() -> List[Dict[str, str]]:
     except OSError:
         return devices
     return devices
+
+
+def list_connected_camera_devices() -> Dict[str, Dict[str, str]]:
+    """列出**当前真正连接且已启动**的相机类设备（用系统自带 pnputil，只读）。
+
+    为什么需要它：
+        注册表 Enum 分支里同时保存着"历史上插过、现在没插"的设备
+        （本机就有 2 个 Intel RealSense D405 是这种残留），
+        只看注册表会把不存在的相机也算进去，误导人。pnputil 会给出 Status 字段
+        （Started / Disconnected），据此过滤才是真实的设备清单。
+
+    输入：无
+    输出：dict，键为设备实例 ID，值为
+        {"description": "USB Camera", "status": "Started", "driver": "usbvideo.inf"}
+    说明：pnputil 输出在中文系统上可能是 GBK 编码，这里用 errors='replace' 容错，
+          并且只解析 ASCII 字段（Instance ID / Status），不依赖中文。
+    """
+    out: Dict[str, Dict[str, str]] = {}
+    try:
+        proc = subprocess.run(
+            ["pnputil", "/enum-devices", "/connected", "/class", "Camera"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+    except Exception:
+        return out
+
+    cur: Optional[str] = None
+    for raw in (proc.stdout or "").splitlines():
+        line = raw.strip()
+        if line.startswith("Instance ID:"):
+            cur = line.split(":", 1)[1].strip()
+            out[cur] = {"description": "", "status": "", "driver": ""}
+        elif cur and line.startswith("Device Description:"):
+            out[cur]["description"] = line.split(":", 1)[1].strip()
+        elif cur and line.startswith("Status:"):
+            out[cur]["status"] = line.split(":", 1)[1].strip()
+        elif cur and line.startswith("Driver Name:"):
+            out[cur]["driver"] = line.split(":", 1)[1].strip()
+    return out
 
 
 def quick_probe_index(
@@ -152,8 +201,9 @@ def quick_probe_index(
             return result
         if fourcc:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        if width > 0 and height > 0:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 降低延迟：只保留最新帧
         except Exception:
@@ -249,6 +299,10 @@ class StereoCamera:
         self.read_retry: int = int(self.cfg.get("read_retry", 3))
         self.blank_mean_th: float = float(self.cfg.get("black_mean_threshold", 1.0))
         self.blank_std_th: float = float(self.cfg.get("black_std_threshold", 1.0))
+        # "无有效信号"更宽的判定：灰度和标准差都很小 => 驱动返回的是空缓冲/噪声，
+        # 而不是"环境太暗"。实测本机唯一能打开的相机就是这种状态（mean≈2, std≈4）。
+        self.no_signal_mean_th: float = float(self.cfg.get("no_signal_mean_threshold", 5.0))
+        self.no_signal_std_th: float = float(self.cfg.get("no_signal_std_threshold", 12.0))
 
         self.eye_width: int = int(self.cfg.get("eye_width", 0) or 0)
         self.split: str = str(self.cfg.get("split", "left_right")).lower()
@@ -266,6 +320,7 @@ class StereoCamera:
             "frames": 0,
             "read_fail": 0,
             "blank_frames": 0,
+            "no_signal_frames": 0,
             "measured_fps": 0.0,
         }
 
@@ -421,22 +476,38 @@ class StereoCamera:
         raise ValueError(f"camera.split 只能是 left_right 或 right_left，当前为 {self.split!r}")
 
     def _check_blank(self, left: np.ndarray, right: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """检测全黑帧并计数；只警告一次，避免刷屏。不改变像素数据。"""
-        def is_blank(img: np.ndarray) -> bool:
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-            return bool(gray.mean() < self.blank_mean_th and gray.std() < self.blank_std_th)
+        """检测"全黑"与"无有效信号"两类异常帧并计数；只警告一次，避免刷屏。
 
-        blank = is_blank(left) or is_blank(right)
+        判定分两级（阈值都来自 config.yaml，可调）：
+            1) 全黑   ：mean < black_mean_threshold 且 std < black_std_threshold
+            2) 无信号 ：mean < no_signal_mean_threshold 且 std < no_signal_std_threshold
+        为什么不用"单看 mean 小"来判断：真实但很暗的场景（关灯的房间）也会有
+        一定噪声（std 明显大于 0），而驱动返回空缓冲时是"接近 0 的均值 + 很小的噪声"。
+        本函数不修改像素数据，只计数 + 首次警告。
+        """
+        def quality(img: np.ndarray) -> Tuple[float, float]:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+            return float(gray.mean()), float(gray.std())
+
+        stats = [quality(left), quality(right)]
+        blank = any(m < self.blank_mean_th and s < self.blank_std_th for m, s in stats)
+        no_signal = any(m < self.no_signal_mean_th and s < self.no_signal_std_th for m, s in stats)
+
         if blank:
             self.stats["blank_frames"] += 1
+        if no_signal or blank:
+            self.stats["no_signal_frames"] += 1
             if not self._blank_warned:
                 self._blank_warned = True
+                m, s = stats[0]
                 print(
-                    "[警告] 检测到全黑画面。常见原因：\n"
-                    "       1) 相机镜头被遮挡或环境全黑；\n"
-                    "       2) 分辨率/FOURCC 未被驱动接受（画面缓冲为 0）；\n"
-                    "       3) 曝光尚未收敛（可增大 camera.warmup_frames）；\n"
-                    "       4) 设备异常。请运行 python tools/probe_cameras.py 复查。"
+                    f"[警告] 画面无有效图像数据（左眼 mean={m:.2f} std={s:.2f}）。常见原因：\n"
+                    "       1) 相机未真正出流（USB 端口/线材/供电，或用了 USB2 跑不动）；\n"
+                    "       2) 分辨率/FOURCC 未被驱动接受（见 tools/probe_cameras.py 结果）；\n"
+                    "       3) 镜头被遮挡 / 镜头盖未取下 / 环境全黑；\n"
+                    "       4) 曝光未收敛（可增大 camera.warmup_frames）；\n"
+                    "       5) 设备被其他程序占用。\n"
+                    "       请用『Windows 相机 App』交叉验证：若 App 里也没画面，则不是本项目代码的问题。"
                 )
         return left, right
 

@@ -133,30 +133,33 @@ def save_frame_pair(
 def run_list(cfg: Dict[str, Any]) -> int:
     """列出注册表设备名 + 对候选索引做快速扫描（每个索引独立、失败即跳过）。"""
     print("=" * 88)
-    print("  Windows 注册表里在线的 UVC 视频设备")
+    print("  Windows 上当前真正连接的 UVC 视频设备（历史残留会单独标注）")
     print("=" * 88)
     devs = list_video_devices_from_registry()
     if not devs:
         print("  （读不到设备名）")
     for d in devs:
-        print(f"  {d['vid_pid']:<12} {d['friendly_name']:<32} {d['instance_id']}")
+        flag = "在线" if d.get("present") == "是" else "历史残留(未插)"
+        print(f"  [{flag}] {d['vid_pid']:<12} {d['friendly_name']:<32} {d['instance_id']}")
 
     print("\n" + "=" * 88)
-    print("  OpenCV 索引快速扫描（每个索引单独尝试，失败的直接跳过）")
+    print("  OpenCV 索引快速扫描（不设置分辨率/格式，最接近驱动默认行为）")
     print("=" * 88)
     cam = cfg.get("camera", {})
     for idx in range(6):
         r = quick_probe_index(
             idx,
             backend=cam.get("backend", "dshow"),
-            fourcc=cam.get("fourcc", "MJPG"),
-            width=int(cam.get("width", 1280)),
-            height=int(cam.get("height", 480)),
+            fourcc="",           # 不设格式：实测设 MJPG 反而读不到帧
+            width=0,
+            height=0,
         )
         if r["opened"]:
+            # 用"无有效信号"的更宽判定，避免把驱动空缓冲误当成"环境暗"
+            no_sig = r["mean"] < 5.0 and r["std"] < 12.0
             print(
                 f"  索引 {idx}: 可打开  {r['width']}x{r['height']}  fps~{r['fps']}  "
-                f"mean={r['mean']} std={r['std']}  {'全黑' if r['blank'] else '有画面'}"
+                f"mean={r['mean']} std={r['std']}  {'无有效信号' if no_sig else '有画面'}"
             )
         else:
             print(f"  索引 {idx}: 不可用（{r['error']}）")
@@ -295,6 +298,7 @@ def run_preview(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     print(f"  平均采集帧率  : {cam.stats['frames'] / dt:.2f} FPS（含显示开销）")
     print(f"  读取失败次数  : {cam.stats['read_fail']}")
     print(f"  全黑帧次数    : {cam.stats['blank_frames']}")
+    print(f"  无有效信号帧  : {cam.stats['no_signal_frames']}  <-- 大于 0 说明相机没有给出真实图像")
     print(f"  保存快照次数  : {saved_count}")
     print("  相机已释放。若再次运行提示被占用，请确认没有别的程序（相机 App / 浏览器）在用它。")
     return 0

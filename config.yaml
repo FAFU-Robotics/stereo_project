@@ -23,31 +23,45 @@ project:
 # =============================================================================
 camera:
   # 采集模式，二选一：
-  #   side_by_side —— 一个 USB 设备输出"左右拼接"画面（实测 DECXIN 很可能是这种）
+  #   side_by_side —— 一个 USB 设备输出"左右拼接"画面（左右眼在同一幅图里）
   #   dual         —— 两个独立 UVC 设备，各占一个 OpenCV 索引
-  # 【待实测确认】由 tools/probe_cameras.py 的结果决定；确认前不要用它做测量
+  #
+  # 【阶段 1 实测结论 —— 重要，改动前先看这里】
+  #   1) 本机 OpenCV **只有索引 2 能打开**（0/1/3~9 全部立即失败），dshow 与 msmf 都一样；
+  #   2) pnputil 显示当前真正连接的相机只有 2 个：
+  #        "USB Camera"(VID_0BDA&PID_5883, Started)、"HP True Vision FHD Camera"(Started)；
+  #        两个 Intel RealSense D405 是历史残留(Disconnected)，不是真设备；
+  #   3) 索引 2 能打开但**画面无有效信号**：640x480，mean≈2、std≈4，帧率只有约 1 fps；
+  #      一旦设置 MJPG，所有分辨率都变成"读不到帧" => 先把 fourcc 留空；
+  #   4) 所以"这个设备是否双目相机 / 是否左右拼接"**尚未确认**，
+  #      必须先用 Windows 相机 App 人眼确认，再回来填写下面的参数。
   mode: side_by_side
 
   # ---- side_by_side 模式参数 ----
-  single_index: 2          # 【待实测确认】单设备索引
+  single_index: 2          # 实测：本机唯一能打开的索引（是否双目待确认）
   split: left_right        # left_right = 左半幅是左眼；right_left = 右半幅是左眼
   eye_width: 0             # 每只眼的有效宽度；0 = 自动对半切（宽//2）
 
-  # ---- dual 模式参数 ----
+  # ---- dual 模式参数（当前不可用：只有一个索引能打开）----
   left_index: 1            # 【待实测确认】
   right_index: 2           # 【待实测确认】
 
   # ---- 通用采集参数 ----
   backend: dshow           # dshow / msmf / any
-  fourcc: MJPG             # MJPG / YUY2 / ""（不设置）
-  width: 1280              # 请求宽度（拼接模式下是"整幅"宽度）
-  height: 480              # 请求高度
+  fourcc: ""               # 实测：本设备设置 MJPG 后读不到帧，故留空（不设置）
+  width: 640               # 实测驱动默认输出 640x480
+  height: 480              # （设置更大分辨率会被"接受"但依然没有有效信号）
   fps: 30                  # 请求帧率（仅建议值，实际以实测为准）
   warmup_frames: 15        # 打开后丢弃的前若干帧，等自动曝光/白平衡稳定
   read_retry: 3            # 单帧读取失败时的重试次数
   # 黑屏判定：平均灰度与标准差同时低于阈值 => 判定为黑屏（不静默当成正常画面）
   black_mean_threshold: 1.0
   black_std_threshold: 1.0
+  # "无有效信号"判定（更宽）：驱动返回空缓冲/噪声时，灰度和标准差都会很小。
+  # 实测本机唯一能打开的相机就是这种状态（640x480, mean≈2, std≈4, 约 1 fps），
+  # 用这两个阈值就能自动识别出来并报警，而不是把黑屏当成"环境暗"。
+  no_signal_mean_threshold: 5.0
+  no_signal_std_threshold: 12.0
 
 # =============================================================================
 # 深度（视差 -> 深度）
