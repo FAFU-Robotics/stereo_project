@@ -650,10 +650,12 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     out_root = os.path.join(cfg["project"]["output_dir"], "captures")
     paused = False
     saved = 0
+    auto_saved = False
     n_processed = 0
     rec_infer_ms: List[float] = []
     t_loop_start = time.perf_counter()
     last = {}
+    save_now = False
 
     try:
         cam.open()
@@ -805,24 +807,40 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     print(f"         点云 {last['pc_stats']}  深度 {last['stats']}")
                     print(f"         参数 {params_full.describe()}")
                 if StereoViewer.is_snapshot(key):
-                    d = make_session_dir(out_root, "cloud")
-                    files = save_frame_pair(last["left"], last["right"], d, cfg,
-                                            note="阶段 4 深度+点云保存")
-                    p = os.path.join(d, "disparity.npy"); np.save(p, last["disp"]); files.append(p)
-                    p = save_depth_npy(last["depth"], d, last["params"],
+                    save_now = True
+
+            # ---- 自动保存（--save-snapshot）：默认第 20 帧，便于无人值守留证 ----
+            if args.save_snapshot and not auto_saved and last:
+                target = 20 if not args.max_frames else max(1, min(20, args.max_frames // 2))
+                if n_processed >= target:
+                    save_now = True
+
+            if save_now and last:
+                d = make_session_dir(out_root, "cloud")
+                files = save_frame_pair(last["left"], last["right"], d, cfg,
+                                        note="阶段 4 深度+点云保存")
+                p = os.path.join(d, "disparity.npy"); np.save(p, last["disp"]); files.append(p)
+                p = save_depth_npy(last["depth"], d, last["params"],
+                                   extra={"scale": last["scale"], "valid_iters": est.valid_iters,
+                                          "max_disp": est.max_disp,
+                                          "有效深度比例": f"{last['stats']['valid_ratio']:.2f}%",
+                                          "中位深度_m": f"{last['stats']['median_m']:.4f}"})
+                files.append(p)
+                cv2.imwrite(os.path.join(d, "depth_vis.png"), depth_vis)
+                files.append(os.path.join(d, "depth_vis.png"))
+                # 点云：为保存单独复制一份（避免与实时对象互相影响）
+                ply = builder.save_ply(o3d.geometry.PointCloud(pcd), d, last["params"],
                                        extra={"scale": last["scale"], "valid_iters": est.valid_iters,
-                                              "max_disp": est.max_disp, "有效深度比例": f"{last['stats']['valid_ratio']:.2f}%"})
-                    files.append(p)
-                    cv2.imwrite(os.path.join(d, "depth_vis.png"), depth_vis)
-                    files.append(os.path.join(d, "depth_vis.png"))
-                    # 点云：为保存单独 clone 一份（避免与实时对象互相影响）
-                    ply = builder.save_ply(o3d.geometry.PointCloud(pcd), d, last["params"],
-                                           extra={"scale": last["scale"], "valid_iters": est.valid_iters,
-                                                  "max_disp": est.max_disp,
-                                                  "points": last["pc_stats"]["points"]})
-                    files.append(ply)
-                    saved += 1
-                    print(f"  已保存 {len(files)} 个文件到：{d}")
+                                              "max_disp": est.max_disp,
+                                              "points": last["pc_stats"]["points"]})
+                files.append(ply)
+                saved += 1
+                auto_saved = True
+                print(f"  已保存 {len(files)} 个文件到：{d}")
+                for f in files:
+                    print(f"    {f}")
+
+            save_now = False   # 必须复位：否则按一次 s 之后会每帧都保存，把硬盘写满
 
             if args.max_frames and n_processed >= args.max_frames:
                 print(f"  已达 --max-frames={args.max_frames}，自动退出")

@@ -81,21 +81,23 @@ echo   [2] Live disparity  [stage 3]      (main.py --mode depth)
 echo   [3] Live disparity, faster preset  (--scale 0.5 --valid-iters 4)
 echo   [4] Live point cloud [stage 4]     (main.py --mode pointcloud)
 echo   [5] Live point cloud, faster       (--scale 0.5 --valid-iters 4)
-echo   [6] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
-echo   [7] DirectShow capture test        (pygrabber, no OpenCV)
-echo   [8] OpenCV capture test            (saves a snapshot)
+echo   [6] Point cloud + AUTO-SAVE        (30 frames, saves PLY + depth + images)
+echo   [7] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
+echo   [8] DirectShow capture test        (pygrabber, no OpenCV)
+echo   [9] OpenCV capture test            (saves a snapshot)
 echo   [0] Exit
 echo ============================================================
 set "DO="
-set /p "CH=Type 1..8 or 0 then press Enter: "
+set /p "CH=Type 1..9 or 0 then press Enter: "
 if "%CH%"=="1" set "DO=PREVIEW"
 if "%CH%"=="2" set "DO=DEPTH"
 if "%CH%"=="3" set "DO=DEPTHFAST"
 if "%CH%"=="4" set "DO=CLOUD"
 if "%CH%"=="5" set "DO=CLOUDFAST"
-if "%CH%"=="6" set "DO=DEPTHSAVE"
-if "%CH%"=="7" set "DO=DSTEST"
-if "%CH%"=="8" set "DO=CVTEST"
+if "%CH%"=="6" set "DO=CLOUDSAVE"
+if "%CH%"=="7" set "DO=DEPTHSAVE"
+if "%CH%"=="8" set "DO=DSTEST"
+if "%CH%"=="9" set "DO=CVTEST"
 if "%CH%"=="0" set "DO=EXIT"
 if not defined DO goto menu
 if /i "%DO%"=="EXIT" goto done
@@ -104,12 +106,23 @@ if /i "%DO%"=="DEPTH"     call :do_depth
 if /i "%DO%"=="DEPTHFAST" call :do_depth_fast
 if /i "%DO%"=="CLOUD"     call :do_cloud
 if /i "%DO%"=="CLOUDFAST" call :do_cloud_fast
+if /i "%DO%"=="CLOUDSAVE" call :do_cloud_save
 if /i "%DO%"=="DEPTHSAVE" call :do_depth_save
 if /i "%DO%"=="CVTEST"    call :do_cvtest
 if /i "%DO%"=="DSTEST"    call :do_dstest
 echo.
 pause
 goto menu
+
+:do_cloud_save
+echo.
+echo --- live point cloud + AUTOMATIC SAVE (30 frames) ---
+echo     Aim at a TEXTURED scene 0.5 - 2 m away, normal lighting, hold still.
+echo     One frame is saved automatically (PLY + depth + images). No key press needed.
+"%PY%" main.py --mode pointcloud --save-snapshot --max-frames 30
+echo.
+echo     Output folder: output\captures\<timestamp>_cloud\
+exit /b
 
 :do_cloud
 echo.
