@@ -377,9 +377,18 @@ class StereoCamera:
         if not cap.isOpened():
             cap.release()
             raise CameraError(
-                f"无法打开相机索引 {index}（{name}，后端={self.backend}）。"
-                "可能原因：索引不对、设备被其他程序占用、或该后端不支持按索引打开。"
-                "请先运行：python tools/probe_cameras.py"
+                f"无法打开相机索引 {index}（{name}，后端={self.backend}）。\n"
+                "        【本机实测原因】Windows 帧服务器对**物理相机**返回 E_ACCESSDENIED(0x80070005)，\n"
+                "        而软件虚拟摄像头（HP 的 OMEN Cam & Voice，索引 2）可以打开。已排除：OpenCV 版本、\n"
+                "        沙箱权限、完整性级别、锁屏、相机隐私设置、设备故障、驱动注册损坏。\n"
+                "        时间线证据：9/29 16:04 本机 python 还能用相机；9/29 18:53 HP OMEN 助手进程启动后失效。\n"
+                "        【建议排查顺序】\n"
+                "          1) 按一下 F8 / Fn+F8（HP 摄像头隐私键），再复测；\n"
+                "          2) 打开 OMEN Gaming Hub，关闭摄像头/虚拟摄像头/背景虚化相关功能，或直接退出该软件；\n"
+                "             也可在任务管理器结束 HP.OMEN.VirtualCamHelper.exe 与 HP.OMEN.VadRedirectHelper.exe\n"
+                "             （临时操作，随软件自动重启，不修改任何设置）；\n"
+                "          3) 复测：python tools\\probe_cameras.py --index 1\n"
+                "          4) 完整证据与分析见 docs\\阶段1_相机根因分析.md"
             )
         if self.fourcc:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))

@@ -26,32 +26,40 @@ camera:
   #   side_by_side —— 一个 USB 设备输出"左右拼接"画面（左右眼在同一幅图里）
   #   dual         —— 两个独立 UVC 设备，各占一个 OpenCV 索引
   #
-  # 【阶段 1 实测结论 —— 重要，改动前先看这里】
-  #   1) 本机 OpenCV **只有索引 2 能打开**（0/1/3~9 全部立即失败），dshow 与 msmf 都一样；
-  #   2) pnputil 显示当前真正连接的相机只有 2 个：
-  #        "USB Camera"(VID_0BDA&PID_5883, Started)、"HP True Vision FHD Camera"(Started)；
-  #        两个 Intel RealSense D405 是历史残留(Disconnected)，不是真设备；
-  #   3) 索引 2 能打开但**画面无有效信号**：640x480，mean≈2、std≈4，帧率只有约 1 fps；
-  #      一旦设置 MJPG，所有分辨率都变成"读不到帧" => 先把 fourcc 留空；
-  #   4) 所以"这个设备是否双目相机 / 是否左右拼接"**尚未确认**，
-  #      必须先用 Windows 相机 App 人眼确认，再回来填写下面的参数。
+  # 【阶段 1 实测结论（已取证，见 docs/阶段1_相机根因分析.md）】
+  #   索引映射（由 DirectShow 枚举 + pygrabber 两条独立路径确认）：
+  #       0 = HP True Vision FHD Camera   （笔记本内置物理相机，YUY2，最高 1920x1080）
+  #       1 = USB Camera                  （VID_0BDA&PID_5883 = DECXIN 双目相机）
+  #       2 = OMEN Cam ＆ Voice            （HP 的**软件虚拟摄像头**，不要用！）
+  #
+  #   DECXIN（索引 1）的真实能力清单（驱动直接声明，MJPG 与 YUY2 各一套）：
+  #       2560x960 / 2048x768 / 2560x720 / 1920x540 / 1600x600 / 1280x480 / 640x240
+  #       —— 全部是 8:3 超宽比例，即"左右拼接"布局：1280x480 = 2 x 640x480（每只眼 640x480）
+  #       —— 它**不提供** 640x480 这类单幅分辨率，之前请求 640x480 是错的
+  #
+  #   ⚠️ 当前阻塞：两个物理相机（索引 0 和 1）访问时都返回
+  #       HRESULT=0x80070005 (E_ACCESSDENIED)，即 Windows 帧服务器拒绝本进程访问相机。
+  #       时间线证据：9/29 16:04 本机 python312 还能正常用相机；9/29 18:53 起
+  #       HP OMEN 的 VirtualCamHelper 等进程启动（它用 MFReadWrite 读摄像头）之后就不能用了。
+  #       => 怀疑 HP OMEN 的摄像头/虚拟摄像头功能独占了物理相机，待人工验证（见文档第 7 节）。
+  #       在解决之前，运行 main.py 会在打开索引 1 时报错并给出提示。
   mode: side_by_side
 
   # ---- side_by_side 模式参数 ----
-  single_index: 2          # 实测：本机唯一能打开的索引（是否双目待确认）
-  split: left_right        # left_right = 左半幅是左眼；right_left = 右半幅是左眼
-  eye_width: 0             # 每只眼的有效宽度；0 = 自动对半切（宽//2）
+  single_index: 1          # 实测 = DECXIN 双目相机（不是 2；2 是 HP 虚拟摄像头）
+  split: left_right        # left_right = 左半幅是左眼；right_left = 反之（待图像确认）
+  eye_width: 0             # 每只眼的有效宽度；0 = 自动对半切（1280/2 = 640）
 
-  # ---- dual 模式参数（当前不可用：只有一个索引能打开）----
-  left_index: 1            # 【待实测确认】
-  right_index: 2           # 【待实测确认】
+  # ---- dual 模式参数（本机不适用：只有一个物理双目设备）----
+  left_index: 0            # 笔记本内置相机（仅作对照/单目调试用）
+  right_index: 1           # DECXIN
 
   # ---- 通用采集参数 ----
-  backend: dshow           # dshow / msmf / any
-  fourcc: ""               # 实测：本设备设置 MJPG 后读不到帧，故留空（不设置）
-  width: 640               # 实测驱动默认输出 640x480
-  height: 480              # （设置更大分辨率会被"接受"但依然没有有效信号）
-  fps: 30                  # 请求帧率（仅建议值，实际以实测为准）
+  backend: dshow           # dshow / msmf / any（实测 msmf 在本机无法按索引打开，用 dshow）
+  fourcc: MJPG             # 实测该相机常用 MJPG（2560x960@60 等）；YUY2 也支持
+  width: 1280              # 实测支持：1280x480 = 左右各 640x480（FFS 的最佳输入尺寸）
+  height: 480
+  fps: 30                  # 请求帧率（驱动声明最高 60）
   warmup_frames: 15        # 打开后丢弃的前若干帧，等自动曝光/白平衡稳定
   read_retry: 3            # 单帧读取失败时的重试次数
   # 黑屏判定：平均灰度与标准差同时低于阈值 => 判定为黑屏（不静默当成正常画面）

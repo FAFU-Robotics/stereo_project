@@ -1,50 +1,105 @@
 @echo off
-chcp 65001 >nul 2>&1
-title 阶段2 - FFS 官方示例验证
-REM ============================================================
-REM  用官方 demo_data 的左右图跑一遍 Fast-FoundationStereo。
-REM  这是阶段 2 的验收命令，不需要相机。
+REM ============================================================================
+REM  Stage 2 - Fast-FoundationStereo official demo verification
+REM ----------------------------------------------------------------------------
+REM  Runs the official demo images through the FFS model. No camera is needed.
 REM
-REM  前提：weights\23-36-37\ 下同时有
-REM          model_best_bp2_serialize.pth  和  cfg.yaml
-REM        若没有，本窗口会提示下载方式。
-REM ============================================================
+REM  Prerequisite:  weights\23-36-37\  must contain BOTH files
+REM      model_best_bp2_serialize.pth
+REM      cfg.yaml
+REM
+REM  WHY THIS FILE IS PLAIN ASCII ONLY:
+REM    cmd.exe parses a .bat file byte by byte using the active OEM code page.
+REM    Non-ASCII text in a .bat file makes cmd mis-parse following commands
+REM    (for example "'REM' is not recognized ..."). See the camera probe .bat
+REM    in this same tools\ folder for the full explanation.
+REM    Keep this file ASCII-only with CRLF line endings.
+REM ============================================================================
 
+setlocal
+chcp 65001 >nul 2>&1
+
+REM --- Python used by THIS project (the PATH default is Python 3.14) ---
 set "PY=D:\31931\Documents\python312\python.exe"
-set "TEMP=D:\31931\Documents\_tmp"
-set "TMP=D:\31931\Documents\_tmp"
+
+REM --- Project root = parent folder of this .bat (this file lives in tools\) ---
+set "PROJECT_ROOT=%~dp0.."
+
+REM --- Writable temp dir, kept inside the project ---
+set "TEMP=%PROJECT_ROOT%\_work\pip_tmp"
+set "TMP=%TEMP%"
+
+REM --- Let Python print UTF-8 so its Chinese messages render after chcp 65001 ---
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
-
-REM Windows 版 PyTorch 不带 Triton，必须禁用 torch.compile（否则 @torch.compile 会失败）
-set "TORCHDYNAMO_DISABLE=1"
-REM 防止多个 OpenMP 运行时冲突（PyTorch + Open3D 常见）
 set "KMP_DUPLICATE_LIB_OK=TRUE"
 
-cd /d "%~dp0.."
+REM --- Windows PyTorch ships without Triton, so torch.compile must be disabled,
+REM     otherwise the @torch.compile decorators inside FFS fail. ---
+set "TORCHDYNAMO_DISABLE=1"
 
-echo ============================================================
-echo   1) 先检查权重是否就位
-echo ============================================================
-"%PY%" tools\run_ffs_demo.py --check-only
-if errorlevel 3 (
-  echo.
-  echo   [需要先下载权重] 可以试运行：
-  echo       "%PY%" tools\fetch_ffs_weights.py
-  echo   或在浏览器里手动下载后放到 weights\23-36-37\ 下。
+cd /d "%PROJECT_ROOT%"
+if errorlevel 1 (
+  echo [ERROR] cannot enter project root: %PROJECT_ROOT%
   pause
   exit /b 1
 )
 
-echo.
+if not exist "%TEMP%" mkdir "%TEMP%" >nul 2>&1
+
+if not exist "%PY%" (
+  echo [ERROR] project python not found:
+  echo         %PY%
+  pause
+  exit /b 1
+)
+
+if not exist "tools\run_ffs_demo.py" (
+  echo [ERROR] tools\run_ffs_demo.py not found. Current folder:
+  echo         %CD%
+  pause
+  exit /b 1
+)
+
 echo ============================================================
-echo   2) 正式推理（关掉点云窗口后程序结束）
+echo  Step 1/2 : check model weights and environment
 echo ============================================================
-"%PY%" tools\run_ffs_demo.py --repeat 3
+"%PY%" tools\run_ffs_demo.py --check-only
+set "RC=%ERRORLEVEL%"
+
+if not "%RC%"=="0" (
+  echo.
+  echo ============================================================
+  echo  [ERROR] weight/environment check failed. Exit code = %RC%
+  echo ------------------------------------------------------------
+  echo  The weights are not in place yet. Two ways to get them:
+  echo    1^) run:  "%PY%" tools\fetch_ffs_weights.py
+  echo    2^) download the official research checkpoint in a browser and put
+  echo       BOTH files into:  %CD%\weights\23-36-37\
+  echo ============================================================
+  pause
+  exit /b %RC%
+)
 
 echo.
 echo ============================================================
-echo   结果在 output\ffs_demo\ 下（disp.npy / depth_meter.npy /
-echo   disp_vis.png / cloud.ply / meta.txt / timings.txt）
+echo  Step 2/2 : run inference on the official demo images
+echo ------------------------------------------------------------
+echo  Default arguments: --repeat 3
+echo  You can pass your own arguments to this .bat, for example:
+echo      this_file.bat --repeat 5 --scale 0.5 --no-display
 echo ============================================================
+set "DEMO_ARGS=--repeat 3"
+if not "%~1"=="" set "DEMO_ARGS=%*"
+
+"%PY%" tools\run_ffs_demo.py %DEMO_ARGS%
+set "RC=%ERRORLEVEL%"
+
+echo.
+echo ============================================================
+echo  Finished. Exit code = %RC%
+echo  Results in : %CD%\output\ffs_demo\
+echo ============================================================
+
 pause
+endlocal
