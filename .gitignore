@@ -29,6 +29,16 @@ output/probe/_tmp/
 # 临时目录
 _tmp/
 
+# 隔离安装/临时工作目录（例如隔离测试用的 OpenCV 4.x、下载的 wheel）
+# 这些目录体积大、可随时重建，不入库
+_work/
+_tmp_cv4/
+plaindir/
+cache/
+tmpdir/
+mytemp/
+_work_tmp/
+
 # ---- 编辑器 / 系统 ----
 .vscode/
 .idea/
