@@ -560,6 +560,7 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     print(f"  采集帧率        : {cam.stats['measured_fps']:.2f} FPS")
     if rec_infer_ms:
         print(f"  最近推理耗时    : 平均 {np.mean(rec_infer_ms):.1f} ms（约 {1000.0 / np.mean(rec_infer_ms):.1f} FPS）")
+    print(f"  画面清晰度      : {sharpness:.1f}（判据：>100 良好 / 30~100 偏软 / <30 过糊，立体匹配不可靠）")
     print(f"  丢弃帧数(估算)  : {max(cam.stats['frames'] - n_processed, 0)}（推理比采集慢，只保留最新帧）")
     print(f"  读取失败 / 全黑 / 无信号 : {cam.stats['read_fail']} / {cam.stats['blank_frames']} / {cam.stats['no_signal_frames']}")
     print(f"  保存次数        : {saved}")
@@ -875,6 +876,7 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     if last:
         print(f"  最后一次深度    : 有效 {last['stats']['valid_ratio']:.1f}% 中位 {last['stats']['median_m']:.3f} m")
         print(f"  最后一次点云    : {last['pc_stats']['points']} 点（构建 {last['pc_ms']:.0f} ms）")
+    print(f"  画面清晰度      : {sharpness:.1f}（判据：>100 良好 / 30~100 偏软 / <30 过糊，立体匹配不可靠）")
     print(f"  标定状态        : {'已标定' if (params_full and params_full.calibrated) else '未标定（占位参数，禁止测量）'}")
     print(f"  读取失败/全黑/无信号 : {cam.stats['read_fail']} / {cam.stats['blank_frames']} / {cam.stats['no_signal_frames']}")
     print(f"  保存次数        : {saved}")
