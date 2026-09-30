@@ -92,13 +92,17 @@ depth:
 ffs:
   weights_dir: weights/23-36-37
   # 官方研究版 checkpoint 文件名（下载后放在 weights_dir 下）
-  # 同目录还需要官方自带的 cfg.yaml
+  # 同目录还必须要有官方自带的 cfg.yaml（官方脚本/本项目都会读它）
+  # 实测该 cfg.yaml 内容：max_disp=416, valid_iters=8, mixed_precision=true,
+  #                       corr_levels=2, corr_radius=4, n_gru_layers=1,
+  #                       hidden_dims=[128], vit_size=vitl, low_memory=0
   model_file: model_best_bp2_serialize.pth
-  # 每次推理的迭代次数：越小越快、精度略降
+  # 每次推理的迭代次数：越小越快、精度略降（官方表：8 -> 49.4ms / 4 -> 41.1ms @3090）
   valid_iters: 8
-  # 最大视差（代价体编码上限）：192 对大多数场景足够
+  # 最大视差（代价体编码上限）：官方 readme 明确说 192 对大多数场景足够。
+  # 注意 cfg.yaml 里写的是 416，我们用 192 覆盖它（与官方 run_demo 默认一致）。
   max_disp: 192
-  # 输入缩放比例：模型建议图像宽度 < 1000，故常设 0.5
+  # 输入缩放比例：模型建议图像宽度 < 1000，故宽度大时应设 0.5
   scale: 1.0
   # 是否使用官方分层推理（hierachical）
   hiera: 0

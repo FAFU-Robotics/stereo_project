@@ -42,15 +42,18 @@ stereo_project/
 ├── requirements.txt        依赖清单与版本说明（含"为什么必须 cu128"）
 │
 ├── calibration.py          标定 / 去畸变 / 双目校正      （阶段 5 创建）
-├── stereo_depth.py         FFS 模型加载 / 预处理 / 推理  （阶段 3 创建）
+├── stereo_depth.py         FFS 模型加载 / 预处理 / 推理  （阶段 2 已创建）
 ├── depth_utils.py          视差转深度 / 无效值 / 范围过滤（阶段 4 创建）
 ├── pointcloud.py           点云生成 / 过滤 / 下采样 / PLY（阶段 4 创建）
 │
 ├── tools/
 │   ├── probe_cameras.py        相机只读探测（逐配置独立子进程，防驱动挂死）
 │   ├── preview_any.py          单路相机预览/自检（不需要配置文件）
+│   ├── fetch_ffs_weights.py    下载官方研究版权重（纯标准库，含 Drive 确认令牌处理）
+│   ├── run_ffs_demo.py         官方示例图像验证（阶段 2 验收脚本，Windows 友好）
 │   ├── 相机探测.bat            双击即可跑完整探测
-│   └── 相机单路预览.bat        双击 → 输入索引 → 看画面
+│   ├── 相机单路预览.bat        双击 → 输入索引 → 看画面
+│   └── 阶段2_FFS官方示例.bat   双击即可跑阶段 2 验证
 │
 ├── docs/
 │   └── 阶段1_相机实测记录.md   本阶段全部实测证据与结论
@@ -86,13 +89,33 @@ REM ⑤ 无窗口自检（用于自动化验证，跑 4 帧就退出）
 python main.py --no-display --max-frames 4
 ```
 
+### 阶段 2：FFS 官方示例验证（不需要相机）
+
+```bat
+cd /d D:\31931\Documents\stereo_project
+set TORCHDYNAMO_DISABLE=1
+
+REM ① 下载官方研究版权重（约 100 MB 级；也可用浏览器手动下载）
+python tools\fetch_ffs_weights.py
+
+REM ② 只检查权重与环境（秒回，不加载模型）
+python tools\run_ffs_demo.py --check-only
+
+REM ③ 正式跑官方示例图像（--repeat 3 统计稳定耗时）
+python tools\run_ffs_demo.py --repeat 3
+
+REM    其他常用：缩小输入提速 / 不看窗口 / 不生成点云
+python tools\run_ffs_demo.py --scale 0.5 --repeat 5 --no-display
+python tools\run_ffs_demo.py --valid-iters 4 --max-disp 192
+```
+
 ## 4. 阶段进度
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 0 | 环境 / 硬件 / 目录检查 | ✅ 完成 |
 | 1 | 项目结构 + 双摄像头采集与显示 | ⚠️ 代码完成，**被相机阻塞**（见第 5 节） |
-| 2 | 接入 FFS（官方示例图像验证） | ⏳ 需要权重 `23-36-37`（尚未下载） |
+| 2 | 接入 FFS（官方示例图像验证） | 🔄 代码完成（`stereo_depth.py` + `tools/run_ffs_demo.py`），权重下载中 |
 | 3 | 实时视差图 | ⏳ |
 | 4 | 深度图 + Open3D 实时点云 | ⏳ |
 | 5 | 标定 / 去畸变 / 双目校正 | ⏳ |
@@ -123,3 +146,26 @@ python main.py --no-display --max-frames 4
 3. **FFS 在 Windows 上必须关闭 `torch.compile`**（无 Triton），推理会明显慢于官方 3090 数据。
 4. **OpenCV 5.0.0** 是较新的大版本。若后续确认相机问题由它引起，
    计划**新建独立环境**装 4.x 验证，**不覆盖**现有可用的 python312 环境（动手前会先征求同意）。
+
+## 7. 网络与下载注意事项（本机实测，很重要）
+
+实测结果：
+
+| 通道 | HTTPS | 说明 |
+|---|---|---|
+| PowerShell / .NET (`Invoke-WebRequest`) | ❌ 全部失败 | `schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS` |
+| git (`git clone/ls-remote`) | ❌ 失败 | 同上，git for Windows 默认用 schannel |
+| **Python 自带 urllib / pip** | ✅ **正常** | 用 OpenSSL 3.0.16，aliyun / GitHub raw / HuggingFace / Google Drive 全部 200 |
+
+因此本项目的下载动作**统一走 Python**：
+
+```bat
+REM pip 走 Python 的 TLS 通道（pip.ini 里已配阿里云镜像）
+python -m pip install <包名>
+
+REM git 若必须用，可临时切到 OpenSSL 后端（只对本次命令生效，不改全局配置）
+git -c http.sslBackend=openssl clone <仓库地址>
+```
+
+Google Drive 大文件会插一层"确认下载"页面，`tools/fetch_ffs_weights.py` 已按表单原样
+重建请求处理该情况（实测漏掉 `id/export` 字段会返回 HTTP 400）。
