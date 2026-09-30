@@ -79,23 +79,26 @@ echo ============================================================
 echo   [1] Live stereo preview            (main.py --mode preview)
 echo   [2] Live disparity  [stage 3]      (main.py --mode depth)
 echo   [3] Live disparity, faster preset  (--scale 0.5 --valid-iters 4)
-echo   [4] DirectShow capture test        (pygrabber, no OpenCV)
-echo   [5] OpenCV capture test            (saves a snapshot)
+echo   [4] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
+echo   [5] DirectShow capture test        (pygrabber, no OpenCV)
+echo   [6] OpenCV capture test            (saves a snapshot)
 echo   [0] Exit
 echo ============================================================
 set "DO="
-set /p "CH=Type 1, 2, 3, 4, 5 or 0 then press Enter: "
+set /p "CH=Type 1, 2, 3, 4, 5, 6 or 0 then press Enter: "
 if "%CH%"=="1" set "DO=PREVIEW"
 if "%CH%"=="2" set "DO=DEPTH"
 if "%CH%"=="3" set "DO=DEPTHFAST"
-if "%CH%"=="4" set "DO=DSTEST"
-if "%CH%"=="5" set "DO=CVTEST"
+if "%CH%"=="4" set "DO=DEPTHSAVE"
+if "%CH%"=="5" set "DO=DSTEST"
+if "%CH%"=="6" set "DO=CVTEST"
 if "%CH%"=="0" set "DO=EXIT"
 if not defined DO goto menu
 if /i "%DO%"=="EXIT" goto done
 if /i "%DO%"=="PREVIEW"   call :do_preview
 if /i "%DO%"=="DEPTH"     call :do_depth
 if /i "%DO%"=="DEPTHFAST" call :do_depth_fast
+if /i "%DO%"=="DEPTHSAVE" call :do_depth_save
 if /i "%DO%"=="CVTEST"    call :do_cvtest
 if /i "%DO%"=="DSTEST"    call :do_dstest
 echo.
@@ -122,6 +125,16 @@ echo.
 echo --- live disparity, FASTER preset: scale 0.5 + valid_iters 4 ---
 echo     (lower resolution disparity, roughly 2x faster than the default)
 "%PY%" main.py --mode depth --scale 0.5 --valid-iters 4
+exit /b
+
+:do_depth_save
+echo.
+echo --- live disparity + AUTOMATIC SAVE (30 frames) ---
+echo     Aim the camera at a TEXTURED scene (desk, keyboard, mug, box...),
+echo     NOT at a blank wall. One frame is saved automatically.
+"%PY%" main.py --mode depth --save-snapshot --max-frames 30
+echo.
+echo     Output folder: output\captures\<timestamp>_autosave\
 exit /b
 
 :do_cvtest

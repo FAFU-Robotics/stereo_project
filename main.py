@@ -362,6 +362,7 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     out_root = os.path.join(cfg["project"]["output_dir"], "captures")
     paused = False
     saved = 0
+    auto_saved = False
     last_left = last_right = None
     last_disp = None
     t_loop_start = time.perf_counter()
@@ -465,6 +466,42 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
             if args.duration and (time.perf_counter() - t_loop_start) >= args.duration:
                 print(f"  已达 --duration={args.duration}s，自动退出")
                 break
+
+            # --save-snapshot：自动保存一次（默认第 20 帧；便于无人值守留证，不用掐时机按键）
+            if args.save_snapshot and not auto_saved:
+                target = 20 if not args.max_frames else max(1, min(20, args.max_frames // 2))
+                if n_processed >= target:
+                    d = make_session_dir(out_root, "autosave")
+                    files = save_frame_pair(last_left, last_right, d, cfg,
+                                            note=f"阶段3 自动保存（第 {n_processed} 帧，未标定，仅流程验证）")
+                    p = os.path.join(d, "disparity.npy")
+                    np.save(p, last_disp)
+                    files.append(p)
+                    p2 = os.path.join(d, "disparity_vis.png")
+                    cv2.imwrite(p2, disp_vis)
+                    files.append(p2)
+                    p3 = os.path.join(d, "meta_stage3.txt")
+                    with open(p3, "w", encoding="utf-8") as fh:
+                        fh.write("\n".join([
+                            "# 阶段 3 实时视差 自动保存",
+                            f"时间            : {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                            f"处理帧序号      : {n_processed}",
+                            f"相机            : {cam.describe()}  单眼 {cam.eye_size[0]}x{cam.eye_size[1]}",
+                            f"模型输入尺寸    : {last_disp.shape[1]}x{last_disp.shape[0]}  (ffs.scale={out['scale']})",
+                            f"valid_iters={est.valid_iters} max_disp={est.max_disp} build_volume={est.build_volume}",
+                            f"推理耗时        : {out['timings_ms']['infer']:.1f} ms",
+                            f"有效视差比例    : {valid_ratio:.2f}%",
+                            f"端到端帧率      : {e2e_fps:.2f} FPS",
+                            "",
+                            "⚠️ 未标定：无内参、无畸变参数、无校正映射。",
+                            "   本目录数据仅用于流程验证，不能测距、不能测尺寸、不能定位。",
+                        ]) + "\n")
+                    files.append(p3)
+                    auto_saved = True
+                    saved += 1
+                    print(f"  已自动保存 {len(files)} 个文件到：{d}")
+                    for f in files:
+                        print(f"    {f}")
 
     except CameraError as exc:
         print(f"[相机错误] {exc}")
