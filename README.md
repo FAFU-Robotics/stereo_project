@@ -119,6 +119,18 @@ python main.py --mode depth --no-display --max-frames 5
 python main.py --mode pointcloud --no-display --no-cloud-window --max-frames 3
 ```
 
+### 离线自检（改代码后建议先跑这个：不需要相机，也不需要管理员）
+
+```bat
+python tools\offline_selftest.py            REM 三种模式 × 清晰/模糊 共 6 个场景
+python tools\offline_selftest.py --frames 25
+```
+
+它用**假相机 + 假模型**把 `preview` / `depth` / `pointcloud` 三条实时链路完整跑一遍，
+专门用来抓"某个模式里变量忘了初始化"这类只在特定场景（例如画面模糊）才暴露的崩溃。
+> 为什么要有它：曾经因为 `run_pointcloud` 里漏初始化一个变量，导致画面模糊时崩溃退出
+> （清晰时被 Python 的 `and` 短路掩盖），用户实测表现为"实时演示有时会突然停下"。
+
 ### 相机诊断工具（只读，不需要管理员；部分功能需要）
 
 ```bat

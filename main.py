@@ -657,6 +657,12 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     t_loop_start = time.perf_counter()
     last = {}
     save_now = False
+    # 图像质量相关变量必须在这里初始化（不能只在 run_depth 里初始化）：
+    # 漏掉这两个会导致本函数第一次做清晰度检查时抛
+    # UnboundLocalError: cannot access local variable 'sharp_warned'
+    # （实测踩过：点云模式跑到第 2 帧就崩，表现为"实时演示突然停下"）
+    sharpness = 0.0
+    sharp_warned = False
 
     try:
         cam.open()
