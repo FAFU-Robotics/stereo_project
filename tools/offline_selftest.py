@@ -40,6 +40,15 @@ import camera as camera_mod          # noqa: E402
 import main as main_mod              # noqa: E402
 import stereo_depth as sd_mod        # noqa: E402
 
+# 自检专用的输出目录：**绝不能沿用 config 里的 output/**，否则合成数据会混进真实测量数据
+OUT_DIR = os.path.join(PROJECT_ROOT, "_work", "selftest_output")
+
+
+def _out_dirs() -> set:
+    """列出自检输出目录下已有的 captures 子目录名（用于统计本次新增了哪些）。"""
+    cap = os.path.join(OUT_DIR, "captures")
+    return set(os.listdir(cap)) if os.path.isdir(cap) else set()
+
 
 # -----------------------------------------------------------------------------
 # 假实现（模拟相机与 FFS 模型）
@@ -195,7 +204,7 @@ def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud") -
         # 自检会用 --save-snapshot 跑真实的保存代码，如果沿用 config 里的 output/，
         # 就会把**合成数据**写进 output/captures/，混进真实测量数据里很难分辨
         # （实测踩过：13 个目录的假数据混入 output/captures，视差统计量完全相同才被发现）。
-        cfg["project"]["output_dir"] = os.path.join(PROJECT_ROOT, "_work", "selftest_output")
+        cfg["project"]["output_dir"] = OUT_DIR
         # 把异常接住并转成"失败"，而不是让自检脚本自己崩掉 ——
         # 这样报告里能直接看到异常类型与消息（例如 UnboundLocalError: sharp_warned）
         runner = {"preview": main_mod.run_preview,
@@ -226,17 +235,39 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="离线自检：不开相机跑完整实时流程")
     ap.add_argument("--frames", type=int, default=25, help="每个场景跑多少帧（默认 25）")
     ap.add_argument("--config", default=os.path.join(PROJECT_ROOT, "config.yaml"))
+    ap.add_argument("--keep-output", action="store_true",
+                    help="保留自检产生的保存文件（默认跑完自动清理，否则每次会留下约 20 MB 的 PLY）")
     a = ap.parse_args()
 
     print("### 离线自检：不打开相机、不使用真实权重、不需要管理员权限 ###")
     print(f"#  项目根目录: {PROJECT_ROOT}")
     print(f"#  帧数: {a.frames}（>20 才能覆盖自动保存路径）")
+    print(f"#  自检输出目录: {OUT_DIR}（与真实数据 output/ 完全隔离）")
+
+    before = _out_dirs()
     bad = 0
     total = 0
     for mode in ("preview", "depth", "pointcloud"):
         for blur in (False, True):
             total += 1
             bad += run_case(a.config, blur=blur, frames=a.frames, mode=mode)
+
+    # 顺带核对"自动保存"这条路径真的写出了东西（否则测试只覆盖了计算、没覆盖保存）
+    produced = sorted(_out_dirs() - before)
+    print("=" * 88)
+    print(f"#  自动保存路径产出: {len(produced)} 个目录")
+    for p in produced:
+        print(f"#     {p}")
+
+    if os.path.isdir(OUT_DIR) and not a.keep_output:
+        import shutil
+        size = sum(os.path.getsize(os.path.join(dp, f))
+                   for dp, _, fs in os.walk(OUT_DIR) for f in fs)
+        shutil.rmtree(OUT_DIR, ignore_errors=True)
+        print(f"#  已清理自检输出（{size / 1048576:.1f} MB）—— 加 --keep-output 可保留")
+    elif a.keep_output:
+        print("#  已保留自检输出（--keep-output）")
+
     print("=" * 88)
     if bad:
         print(f"  ❌ {total} 个场景中有 {bad} 个失败（很可能是变量未初始化 / 流程中断）")

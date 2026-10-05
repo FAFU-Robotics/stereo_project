@@ -79,6 +79,12 @@ output/probe/cv412/report.json     + output/probe/cv412_console.txt
 - `python312`：**未改动**。`cv2 5.0.0` 与 `numpy 2.5.3` 路径、版本与测试前完全一致。
 - 隔离目录 `_work/cv412`：保留（**不在任何 PATH 上，对现有程序零影响**），
   如需彻底清理：`python tools\install_opencv4_isolated.py --target D:\31931\Documents\stereo_project\_work\cv412 --remove`
+
+> **【2026-10-05 项目精简时的更新】** 本次实验的结论已经确定（OpenCV 4.12 与 5.0 行为一致，
+> 相机访问被拒与本问题无关），因此为腾出空间已删除：
+> `_work/cv412`（118.7 MB）、`_work/wheels`（43.2 MB）、`tools/install_opencv4_isolated.py`、
+> 以及本实验在 `output/probe/cv412`、`output/probe/cv5` 下的 JSON 报告。
+> 本文档的**结论与数据仍然有效**，只是"复现方法"需要按第 2 节的步骤重新实现脚本。
 - 现有双目程序文件：**未修改**（本阶段只新增了 tools 脚本与文档）。
 - 驱动 / 注册表 / 相机配置：**未做任何修改**。
 

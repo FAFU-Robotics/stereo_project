@@ -111,6 +111,9 @@ python tools\bench_ffs.py --scales 1.0 --iters 8,4 --repeat 6
 
 ## 7. 证据文件
 
+> **【2026-10-05 项目精简时的更新】** 下列 `output/ffs_demo/<时间戳>/` 产物（73 MB，11 次基准运行）
+> 已删除以腾出空间。**结论与数据仍然有效**，随时可用上面第 110 行的复现命令重新生成。
+
 ```
 output/ffs_demo/<时间戳>/disp_vis.png     目视证据（左|右|视差）
 output/ffs_demo/<时间戳>/disp.npy         视差（像素，float32，模型输入分辨率）

@@ -63,10 +63,15 @@ stereo_project/
 ├── tools/
 │   ├── probe_cameras.py        相机只读探测（逐配置独立子进程，防驱动挂死）
 │   ├── preview_any.py          单路相机预览/自检（不需要配置文件）
+│   ├── opencv_camera_check.py  独立相机自检（打印是否管理员，用于权限对照）
+│   ├── offline_selftest.py     离线自检（假相机跑三种模式，不需要相机/管理员）
+│   ├── bench_ffs.py            FFS 性能基准（每档重置峰值显存）
 │   ├── fetch_ffs_weights.py    下载官方研究版权重（纯标准库，含 Drive 确认令牌处理）
 │   ├── run_ffs_demo.py         官方示例图像验证（阶段 2 验收脚本，Windows 友好）
+│   ├── 启动_管理员.bat         ★主入口：自动提权 + 10 项菜单
 │   ├── 相机探测.bat            双击即可跑完整探测
-│   ├── 相机单路预览.bat        双击 → 输入索引 → 看画面
+│   ├── 相机状态检查.bat        帧服务器/HP 组件/DirectShow 抓帧诊断
+│   ├── 相机OpenCV自检.bat      非提权版自检（与提权版对照）
 │   └── 阶段2_FFS官方示例.bat   双击即可跑阶段 2 验证
 │
 ├── docs/
@@ -138,7 +143,7 @@ python main.py --list                                    REM 设备 + 索引快�
 python tools\probe_cameras.py --index 1                  REM 逐配置探测单个索引
 python tools\preview_any.py --index 1                    REM 单路预览/自检
 python tools\dshow_capture_test.py --index 1             REM 绕开 OpenCV 的 DirectShow 抓帧诊断
-REM 或双击：tools\相机状态检查.bat / tools\相机修复_管理员.bat
+REM 或双击：tools\相机状态检查.bat（帧服务器 / HP 组件 / DirectShow 抓帧诊断）
 ```
 
 ### 阶段 2：FFS 官方示例验证（不需要相机）
