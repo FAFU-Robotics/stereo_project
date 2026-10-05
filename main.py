@@ -674,15 +674,26 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
         print("  用真实相机画面预热模型…")
         est.warmup(est.warmup_iters, left=first.left, right=first.right)
 
+        def open_cloud_window():
+            """创建（或重建）Open3D 点云窗口。
+
+            为什么抽成函数：窗口是可以被用户关掉的，而**关掉 3D 窗口不应该结束整个演示**
+            （实测在 Open3D 窗口里按 q/ESC 或点关闭，会把整个实时演示一起退出，
+              这对"实时演示"来说很突兀）。现在关掉窗口只是"暂时收起 3D 视图"，
+              按 o 可以随时重新打开。
+            """
+            v = o3d.visualization.Visualizer()
+            v.create_window(window_name="stereo_project point cloud" +
+                            ("" if params_full.calibrated else "  [UNCALIBRATED]"),
+                            width=int(args.cloud_window), height=int(args.cloud_window))
+            ro = v.get_render_option()
+            ro.point_size = float(args.point_size)
+            ro.background_color = np.array([0.08, 0.08, 0.10])
+            return v
+
         if not args.no_cloud_window:
-            vis = o3d.visualization.Visualizer()
-            vis.create_window(window_name="stereo_project point cloud" +
-                              ("" if params_full.calibrated else "  [UNCALIBRATED]"),
-                              width=int(args.cloud_window), height=int(args.cloud_window))
-            opt = vis.get_render_option()
-            opt.point_size = float(args.point_size)
-            opt.background_color = np.array([0.08, 0.08, 0.10])
-            print("  Open3D 点云窗口已打开（关闭窗口或按 q 退出）")
+            vis = open_cloud_window()
+            print("  3D 点云窗口已打开（关掉它不会结束演示；按 o 可重开，按 q 退出）")
 
         while True:
             if not paused:
@@ -764,9 +775,17 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                         print(f"             处理办法：①把相机对准 0.3~3 m 的场景（别贴太近）；"
                               f"②或临时调低范围，例如 --zmin 0.05")
                     if not vis.poll_events():
-                        print("  点云窗口已关闭，退出")
-                        break
-                    vis.update_renderer()
+                        # 用户关掉了 3D 窗口 -> 只收起 3D 视图，**不结束演示**
+                        print("  3D 点云窗口已关闭（演示继续运行；按 o 可重新打开，按 q 退出）")
+                        try:
+                            vis.destroy_window()
+                        except Exception:
+                            pass
+                        vis = None
+                        vis_added = False
+                        last_pcd = None
+                    else:
+                        vis.update_renderer()
 
             if not last:
                 print("[错误] 还没有任何结果，退出")
@@ -824,6 +843,12 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     print(f"         参数 {params_full.describe()}")
                 if StereoViewer.is_snapshot(key):
                     save_now = True
+                # o 键：重新打开被关掉的 3D 点云窗口（演示不中断）
+                if StereoViewer.is_view3d(key) and vis is None and not args.no_cloud_window:
+                    vis = open_cloud_window()
+                    vis_added = False
+                    last_pcd = None
+                    print("  3D 点云窗口已重新打开")
 
             # ---- 自动保存（--save-snapshot）：默认第 20 帧，便于无人值守留证 ----
             if args.save_snapshot and not auto_saved and last:

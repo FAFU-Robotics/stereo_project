@@ -108,7 +108,12 @@ python main.py --mode pointcloud --scale 0.5 --valid-iters 4     REM 更快预�
 python main.py --mode pointcloud --zmin 0.3 --zmax 2.0           REM 调整深度范围
 python main.py --mode pointcloud --voxel 0.005                   REM 启用体素下采样
 
-REM ⑤ 无窗口自检（跑 N 帧后自动退出，便于自动化验证）
+REM ★ 实时演示不会自己停止：只有按下 q / ESC（或 Ctrl+C）才会退出。
+REM   关掉 Open3D 的 3D 窗口也只是收起 3D 视图，演示继续；按 o 可以重新打开。
+REM   窗口内按键：q/ESC=退出  p/空格=暂停  s=保存  i=状态  h=帮助  o=重开 3D 窗口
+
+REM ⑤ 无窗口自检（**仅用于自动化验证**：跑 N 帧后自动退出，不是演示模式）
+REM    只有显式写 --max-frames / --duration 才会自动退出；演示菜单里都不带这两个参数
 python main.py --no-display --max-frames 4
 python main.py --mode depth --no-display --max-frames 5
 python main.py --mode pointcloud --no-display --no-cloud-window --max-frames 3

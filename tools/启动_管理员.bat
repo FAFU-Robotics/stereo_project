@@ -81,9 +81,9 @@ echo   [2] Live disparity  [stage 3]      (main.py --mode depth)
 echo   [3] Live disparity, faster preset  (--scale 0.5 --valid-iters 4)
 echo   [4] Live point cloud [stage 4]     (main.py --mode pointcloud)
 echo   [5] Live point cloud, faster       (--scale 0.5 --valid-iters 4)
-echo   [6] Point cloud + AUTO-SAVE        (30 frames, saves PLY + depth + images)
+echo   [6] Point cloud + AUTO-SAVE        (runs until q; saves one frame at #20)
 echo   [7] Point cloud, max_disp=320      (for NEAR objects; slower, ~4.1 GB VRAM)
-echo   [8] Disparity + AUTO-SAVE          (30 frames, saves left/right/disparity)
+echo   [8] Disparity + AUTO-SAVE          (runs until q; saves one frame at #20)
 echo   [9] DirectShow capture test        (pygrabber, no OpenCV)
 echo  [10] OpenCV camera check            (standalone; normal-vs-admin compare)
 echo   [0] Exit
@@ -128,10 +128,11 @@ exit /b
 
 :do_cloud_save
 echo.
-echo --- live point cloud + AUTOMATIC SAVE (30 frames) ---
+echo --- live point cloud with AUTOMATIC SAVE (runs until you quit) ---
 echo     Aim at a TEXTURED scene 0.5 - 2 m away, normal lighting, hold still.
-echo     One frame is saved automatically (PLY + depth + images). No key press needed.
-"%PY%" main.py --mode pointcloud --save-snapshot --max-frames 30
+echo     One frame is saved automatically at frame 20 (PLY + depth + images).
+echo     NO key press needed, and it does NOT stop by itself: press q to quit.
+"%PY%" main.py --mode pointcloud --save-snapshot
 echo.
 echo     Output folder: output\captures\<timestamp>_cloud\
 exit /b
@@ -176,10 +177,11 @@ exit /b
 
 :do_depth_save
 echo.
-echo --- live disparity + AUTOMATIC SAVE (30 frames) ---
+echo --- live disparity with AUTOMATIC SAVE (runs until you quit) ---
 echo     Aim the camera at a TEXTURED scene (desk, keyboard, mug, box...),
-echo     NOT at a blank wall. One frame is saved automatically.
-"%PY%" main.py --mode depth --save-snapshot --max-frames 30
+echo     NOT at a blank wall. One frame is saved automatically at frame 20.
+echo     It does NOT stop by itself: press q to quit.
+"%PY%" main.py --mode depth --save-snapshot
 echo.
 echo     Output folder: output\captures\<timestamp>_autosave\
 exit /b

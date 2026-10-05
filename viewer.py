@@ -30,6 +30,7 @@ KEY_PAUSE = (ord("p"), ord(" "))   # p 或 空格：暂停/恢复
 KEY_SNAPSHOT = (ord("s"),)         # s：保存当前数据
 KEY_INFO = (ord("i"),)             # i：打印详细信息（控制台）
 KEY_HELP = (ord("h"),)             # h：显示/隐藏帮助
+KEY_VIEW3D = (ord("o"),)           # o：重新打开被关掉的 3D 点云窗口（演示不中断）
 
 
 class DisparityColorizer:
@@ -266,3 +267,8 @@ class StereoViewer:
     @staticmethod
     def is_help(key: int) -> bool:
         return key in KEY_HELP
+
+    @staticmethod
+    def is_view3d(key: int) -> bool:
+        """是否按下了"重新打开 3D 点云窗口"键（o）。"""
+        return key in KEY_VIEW3D
