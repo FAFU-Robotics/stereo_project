@@ -191,6 +191,11 @@ def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud") -
             cli.append("--no-cloud-window")   # 不开 Open3D 窗口
         args = main_mod.build_parser().parse_args(cli)
         cfg = main_mod.load_config(cfg_path)
+        # ⚠️ 必须把输出目录改到独立位置！
+        # 自检会用 --save-snapshot 跑真实的保存代码，如果沿用 config 里的 output/，
+        # 就会把**合成数据**写进 output/captures/，混进真实测量数据里很难分辨
+        # （实测踩过：13 个目录的假数据混入 output/captures，视差统计量完全相同才被发现）。
+        cfg["project"]["output_dir"] = os.path.join(PROJECT_ROOT, "_work", "selftest_output")
         # 把异常接住并转成"失败"，而不是让自检脚本自己崩掉 ——
         # 这样报告里能直接看到异常类型与消息（例如 UnboundLocalError: sharp_warned）
         runner = {"preview": main_mod.run_preview,
