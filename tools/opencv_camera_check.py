@@ -21,11 +21,20 @@
 
 用法（把 D:\\31931\\Documents\\python312\\python.exe 当解释器）：
     python tools\\opencv_camera_check.py                     # 默认扫描索引 0~2，两种后端
+    python tools\\opencv_camera_check.py --quick             # 快速全扫 0~9（原来的 Camara_test.py 已并入此模式）
     python tools\\opencv_camera_check.py --index 1           # 只测索引 1
     python tools\\opencv_camera_check.py --max-index 4       # 扫描 0~4
     python tools\\opencv_camera_check.py --backends dshow    # 只用 DirectShow
     python tools\\opencv_camera_check.py --frames 30 --res 1280x480 --fourcc MJPG
     python tools\\opencv_camera_check.py --open-params       # 改成"打开时带分辨率/格式"
+
+关于 --quick 模式（与用户原来的 Camara_test.py 的关系）：
+    Camara_test.py 做的是"0~9 全部索引、只用 DSHOW、每路读 1 帧、一行一个结果"，
+    本工具的 --quick **完全覆盖**这套行为，并额外提供三件它没有的东西：
+      ① 打印【是否以管理员身份运行】—— 这是判断"打不开"原因的关键变量；
+      ② 把结果翻译成人话（打不开 / 能打开但读不到帧 / 全黑 / 拿到真实画面）；
+      ③ 结尾给出总结与下一步建议。
+    该脚本已并入本工具，不再作为独立文件存在（如需独立版本，本文件就是）。
 
 如何做对照实验（关键）：
     ① 普通权限：直接双击 tools\\相机OpenCV自检.bat
@@ -234,7 +243,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--fourcc", default="MJPG", help="请求像素格式（默认 MJPG；空字符串=不设置）")
     p.add_argument("--open-params", action="store_true", help="改为在打开时传入分辨率/格式")
     p.add_argument("--save-dir", default="", help="快照保存目录（默认 output/probe）")
+    # --quick：快速全扫模式（等价于用户原来的 Camara_test.py：0~9 全部索引、只用 DSHOW、每路读 1 帧、一行一个结果）
+    p.add_argument("--quick", action="store_true",
+                   help="快速全扫：索引 0~9、只用 dshow、每路读 1 帧、每个索引一行结果"
+                        "（原来的 Camara_test.py 已并入本模式；区别是本工具会先打印是否以管理员运行。"
+                        "与 --index 同时使用时以 --quick 为准）")
     args = p.parse_args(argv)
+
+    if args.quick:
+        # 快速模式固定这些参数：与 Camara_test.py 的行为保持一致，但换成更清晰的输出
+        args.max_index = 9
+        args.index = -1
+        args.backends = "dshow"
+        args.frames = 1
 
     try:
         req_w, req_h = (int(x) for x in str(args.res).lower().split("x"))
@@ -244,7 +265,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     admin = is_admin()
     print("=" * 88)
-    print("  OpenCV 相机可用性自检（独立最小化版本）")
+    print("  OpenCV 相机可用性自检（独立最小化版本）" + ("  [--quick 快速全扫 0~9]" if args.quick else ""))
     print("=" * 88)
     print(f"  管理员权限      : {'是（高完整性）' if admin else '否（普通权限）'}   <-- 关键变量")
     print(f"  Python          : {sys.version.split()[0]}   {sys.executable}")
@@ -291,6 +312,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             verdict = ("✅ 拿到真实画面" if st["real"] > 0 else
                        ("⚠️ 能打开但全是黑屏" if st["blank"] > 0 else
                         ("⚠️ 能打开但无有效信号" if st["read_ok"] > 0 else "⚠️ 能打开但读不到帧")))
+
+            if args.quick:
+                # 快速模式：一行一个索引（Camara_test.py 的风格），但把关键信息都带上
+                brief = (f"{wh} {fcc} {st['fps']:.1f}fps" if st["real"] > 0
+                         else f"{wh} {fcc} 成功{st['read_ok']}/{args.frames}")
+                print(f"  索引 {idx} [{bname:5s}] {verdict}   {brief}")
+                results.append({"index": idx, "backend": bname, "opened": True,
+                                "real": st["real"], "w": real_w, "h": real_h, "fcc": fcc,
+                                "fps": st["fps"], "saved": ""})
+                continue
+
             print(line + f"{msg}  {wh} {fcc} 标称{fps:.1f}fps  "
                          f"实测{st['fps']:.1f}fps  成功{st['read_ok']}/{args.frames} "
                          f"失败{st['read_fail']} 黑{st['blank']} 无信号{st['nosignal']}")
@@ -298,7 +330,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             # 读不到帧 + 我们请求过格式/分辨率 -> 退回"默认设置"再试一次，
             # 用来区分"格式不匹配"和"设备本身不出流"（实测虚拟摄像头属于前者）
-            if st["read_ok"] == 0 and (req_w > 0 or args.fourcc):
+            # 快速模式跳过这一步：它追求"一行一个索引"的简洁输出
+            if (not args.quick) and st["read_ok"] == 0 and (req_w > 0 or args.fourcc):
                 cap2, msg2 = open_camera(idx, bcode, 0, 0, "", False)
                 if cap2 is not None:
                     st2 = grab_frames(cap2, args.frames)

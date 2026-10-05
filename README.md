@@ -140,10 +140,13 @@ python tools\offline_selftest.py --frames 25
 
 ```bat
 python main.py --list                                    REM 设备 + 索引快速扫描
+python tools\opencv_camera_check.py --quick              REM 快速全扫索引 0~9（一行一个结果）
+python tools\opencv_camera_check.py                      REM 详细自检（0~2、两种后端、含是否管理员）
 python tools\probe_cameras.py --index 1                  REM 逐配置探测单个索引
 python tools\preview_any.py --index 1                    REM 单路预览/自检
 python tools\dshow_capture_test.py --index 1             REM 绕开 OpenCV 的 DirectShow 抓帧诊断
 REM 或双击：tools\相机状态检查.bat（帧服务器 / HP 组件 / DirectShow 抓帧诊断）
+REM          tools\相机OpenCV自检.bat --quick（非提权版快速全扫）
 ```
 
 ### 阶段 2：FFS 官方示例验证（不需要相机）
