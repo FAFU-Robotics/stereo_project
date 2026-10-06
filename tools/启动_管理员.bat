@@ -86,10 +86,11 @@ echo   [7] Point cloud, max_disp=320      (for NEAR objects; slower, ~4.1 GB VRA
 echo   [8] Disparity + AUTO-SAVE          (runs until q; saves one frame at #20)
 echo   [9] DirectShow capture test        (pygrabber, no OpenCV)
 echo  [10] OpenCV camera check            (standalone; normal-vs-admin compare)
+echo  [11] Calibration board probe        (stage 5 step 0: usable at which distance?)
 echo   [0] Exit
 echo ============================================================
 set "DO="
-set /p "CH=Type 1..10 or 0 then press Enter: "
+set /p "CH=Type 1..11 or 0 then press Enter: "
 if "%CH%"=="1" set "DO=PREVIEW"
 if "%CH%"=="2" set "DO=DEPTH"
 if "%CH%"=="3" set "DO=DEPTHFAST"
@@ -100,6 +101,7 @@ if "%CH%"=="7" set "DO=CLOUDNEAR"
 if "%CH%"=="8" set "DO=DEPTHSAVE"
 if "%CH%"=="9" set "DO=DSTEST"
 if "%CH%"=="10" set "DO=CVTEST"
+if "%CH%"=="11" set "DO=CALPROBE"
 if "%CH%"=="0" set "DO=EXIT"
 if not defined DO goto menu
 if /i "%DO%"=="EXIT" goto done
@@ -110,6 +112,7 @@ if /i "%DO%"=="CLOUD"      call :do_cloud
 if /i "%DO%"=="CLOUDFAST"  call :do_cloud_fast
 if /i "%DO%"=="CLOUDSAVE"  call :do_cloud_save
 if /i "%DO%"=="CLOUDNEAR"  call :do_cloud_near
+if /i "%DO%"=="CALPROBE"   call :do_calprobe
 if /i "%DO%"=="DEPTHSAVE"  call :do_depth_save
 if /i "%DO%"=="CVTEST"     call :do_cvtest
 if /i "%DO%"=="DSTEST"     call :do_dstest
@@ -124,6 +127,17 @@ echo     Use this when a large part of the picture sits closer than ~20 cm:
 echo     with max_disp=192 those pixels are extrapolated by the network; 320 gives
 echo     the model a real search range for them. Cost: slower (~4 FPS) and ~4.1 GB VRAM.
 "%PY%" main.py --mode pointcloud --max-disp 320
+exit /b
+
+:do_calprobe
+echo.
+echo --- calibration board feasibility probe   [stage 5 / step 0] ---
+echo     Board: DFOPTIX Q12-50-3 = 12x9 squares, 3.0 mm each (11x8 inner corners).
+echo     Place the board facing the camera at 10/12/15/18/20/25/30 cm.
+echo     Press SPACE at each distance to record one frame; press q to finish.
+echo     Output: corners found / pixels per square / sharpness / contrast / verdict,
+echo     plus evidence images and a report under output\calib_probe\.
+"%PY%" tools\capture_calib.py --probe
 exit /b
 
 :do_cloud_save
