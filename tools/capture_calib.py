@@ -104,6 +104,12 @@ class BoardSpec:
                 f"图案 {self.cols * self.square_mm:g}x{self.rows * self.square_mm:g} mm, "
                 f"内角点 {self.pattern_size[0]}x{self.pattern_size[1]}")
 
+    def describe_ascii(self) -> str:
+        """英文/ASCII 版说明 —— 画到图像上的文字必须是 ASCII（cv2.putText 画不出中文）。"""
+        return (f"{self.cols}x{self.rows} squares, {self.square_mm:g} mm each, "
+                f"pattern {self.cols * self.square_mm:g}x{self.rows * self.square_mm:g} mm, "
+                f"inner corners {self.pattern_size[0]}x{self.pattern_size[1]}")
+
 
 # -----------------------------------------------------------------------------
 # 角点检测与分析
@@ -236,13 +242,43 @@ def analyze_pair(left_bgr: np.ndarray, right_bgr: np.ndarray, spec: BoardSpec
     }
 
 
-def draw_overlay(img: np.ndarray, res: Dict[str, Any], spec: BoardSpec) -> np.ndarray:
-    """把角点与判定画到图上（返回副本），用于人工确认。"""
+# 等级 -> 纯 ASCII 标签（画到图上的文字不能有中文/emoji：cv2.putText 只支持 ASCII）
+LEVEL_TAG = {"ok": "[OK]", "warn": "[WARN]", "bad": "[BAD]"}
+
+
+def ascii_summary(res: Dict[str, Any]) -> str:
+    """把指标压成一行**纯 ASCII** 文字，用于画在图像上。
+
+    为什么需要它：原来直接把中文判定（还带 ⚠️/✅ emoji）画到图上，
+    cv2.putText 画不出来，屏幕上只显示 "??"。控制台仍然打印中文版本。
+    """
+    tag = LEVEL_TAG.get(str(res.get("level")), "[?]")
+    parts = [f"{tag} px/sq {res['px_per_square']:.1f}", f"sharp {res['sharpness']:.0f}",
+             f"contrast {res['pattern_contrast_min']:.0f}"]
+    if not res.get("found_l") or not res.get("found_r"):
+        which = ("L" if not res.get("found_l") else "") + ("R" if not res.get("found_r") else "")
+        parts.insert(0, f"no corners ({which})")
+    return "  ".join(parts)
+
+
+def draw_overlay(img: np.ndarray, res: Dict[str, Any], spec: BoardSpec,
+                 side: str = "left") -> np.ndarray:
+    """把角点与判定画到图上（返回副本），用于人工确认。
+
+    side 必须与传入的图像一致！
+    实测踩过：一开始这个函数写死用左眼坐标（corners_l），
+    却被同时用在右图上，导致右图的叠加整体偏移了"一个视差"
+    （10/12/15 cm 处实测视差 276/215/161 px），点全跑到板子外面的手上。
+    """
     out = img.copy()
-    if res["found_l"] and res["corners_l"] is not None:
-        cv2.drawChessboardCorners(out, res["size_l"], res["corners_l"], True)
-    color = {"ok": (0, 255, 0), "warn": (0, 200, 255), "bad": (0, 0, 255)}[res["level"]]
-    StereoViewer._put_text(out, res["verdict"], (10, out.shape[0] - 14), color, 0.6, 2)
+    corners = res["corners_l"] if side == "left" else res["corners_r"]
+    size = res["size_l"] if side == "left" else res["size_r"]
+    if corners is not None and size is not None:
+        cv2.drawChessboardCorners(out, size, np.asarray(corners, np.float32).reshape(-1, 1, 2), True)
+    color = {"ok": (0, 255, 0), "warn": (0, 200, 255), "bad": (0, 0, 255)}.get(
+        str(res.get("level")), (200, 200, 200))
+    StereoViewer._put_text(out, f"{side.upper()}  {ascii_summary(res)}",
+                           (10, out.shape[0] - 14), color, 0.6, 2)
     return out
 
 
@@ -386,14 +422,14 @@ def probe_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -
                     break
                 res = analyze_pair(pair.left, pair.right, spec)
                 status = [
-                    f"target distance: {dist:g} cm   |  {spec.describe()}",
+                    f"target distance: {dist:g} cm   |  {spec.describe_ascii()}",
                     f"corners L/R: {'OK' if res['found_l'] else 'no'} / {'OK' if res['found_r'] else 'no'}   "
-                    f"contrast(worst/overall): {res['pattern_contrast_min']:.0f}/{res['pattern_contrast']:.0f}",
+                    f"contrast worst/overall: {res['pattern_contrast_min']:.0f}/{res['pattern_contrast']:.0f}",
                     f"px per square: {res['px_per_square']:.1f}   sharpness: {res['sharpness']:.0f}   "
                     f"mean/std: {res['mean']:.0f}/{res['std']:.0f}",
-                    res["verdict"],
+                    ascii_summary(res),      # 纯 ASCII：原来直接画中文判定，图上会显示成 ??
                 ]
-                overlay = draw_overlay(pair.left, res, spec)
+                overlay = draw_overlay(pair.left, res, spec, side="left")
                 panels = [("LEFT + corners", overlay, []), ("RIGHT", pair.right, [])]
                 key = viewer.show_panels(panels, status_lines=status)
 
@@ -523,24 +559,36 @@ CHECK_RULES = {
 }
 
 
+def gate_messages(res: Dict[str, Any], thr: Dict[str, float]) -> List[Tuple[str, str]]:
+    """质量门的判断结果，返回 [(中文原因, ASCII原因), ...]；空列表 = 通过。
+
+    为什么要两份：**画在图像上的文字必须纯 ASCII**（cv2.putText 画不出中文，
+    会变成 ?），而控制台里要给人看中文。
+    """
+    if not res["found_l"] and not res["found_r"]:
+        return [("左右眼都没检出角点（太远/太斜/反光/模糊）", "corners not found")]
+    msgs: List[Tuple[str, str]] = []
+    if res["px_per_square"] < thr["min_px_per_square"]:
+        msgs.append((f"图案太小：每格 {res['px_per_square']:.1f} < {thr['min_px_per_square']:g} px（靠近一点）",
+                     f"too small: {res['px_per_square']:.1f} < {thr['min_px_per_square']:g} px/sq"))
+    if res["sharpness"] < thr["min_sharpness"]:
+        msgs.append((f"太糊：清晰度 {res['sharpness']:.0f} < {thr['min_sharpness']:g}",
+                     f"too blurry: sharp {res['sharpness']:.0f}"))
+    if res["pattern_contrast_min"] < thr["min_contrast"]:
+        msgs.append((f"对比度不足：最差区域 {res['pattern_contrast_min']:.0f} < {thr['min_contrast']:g}"
+                     f"（多半是反光，试试把板略微倾斜）",
+                     f"low contrast: {res['pattern_contrast_min']:.0f} (glare?)"))
+    return msgs
+
+
 def quality_gate(res: Dict[str, Any], thr: Dict[str, float]) -> Tuple[bool, List[str]]:
-    """采集质量门：返回 (是否通过, 不通过的原因列表)。
+    """采集质量门：返回 (是否通过, 不通过的中文原因列表)。
 
     注意：**只单眼检出也允许通过**（那一帧仍能用于该眼的单眼内参标定），
     但会在记录里标记为 single-eye，双目外参只用双眼都检出的帧。
     """
-    reasons: List[str] = []
-    if not res["found_l"] and not res["found_r"]:
-        reasons.append("左右眼都没检出角点（太远/太斜/反光/模糊）")
-        return False, reasons
-    if res["px_per_square"] < thr["min_px_per_square"]:
-        reasons.append(f"图案太小：每格 {res['px_per_square']:.1f} < {thr['min_px_per_square']:g} px（靠近一点）")
-    if res["sharpness"] < thr["min_sharpness"]:
-        reasons.append(f"太糊：清晰度 {res['sharpness']:.0f} < {thr['min_sharpness']:g}")
-    if res["pattern_contrast_min"] < thr["min_contrast"]:
-        reasons.append(f"对比度不足：最差区域 {res['pattern_contrast_min']:.0f} < {thr['min_contrast']:g}"
-                       f"（多半是反光，试试把板略微倾斜）")
-    return (len(reasons) == 0), reasons
+    msgs = gate_messages(res, thr)
+    return (len(msgs) == 0), [m[0] for m in msgs]
 
 
 def _pose_signature(pose: Dict[str, Any]) -> Tuple:
@@ -612,7 +660,10 @@ def capture_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec)
                 break
             res = analyze_pair(pair.left, pair.right, spec)
             pose = classify_pose(res, pair.left.shape[:2], spec)
-            ok, reasons = quality_gate(res, thr)
+            gate = gate_messages(res, thr)          # [(中文, ASCII), ...]
+            ok = (len(gate) == 0)
+            reasons = [m[0] for m in gate]           # 控制台用中文
+            reasons_ascii = [m[1] for m in gate]     # 画到图上的状态栏必须纯 ASCII
             dup = bool(pose) and (_pose_signature(pose) in sigs)
             both = bool(res["found_l"] and res["found_r"])
 
@@ -625,10 +676,12 @@ def capture_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec)
                 f"px per square: {res['px_per_square']:.1f}   sharpness: {res['sharpness']:.0f}   "
                 f"contrast worst: {res['pattern_contrast_min']:.0f}",
                 ("READY: press SPACE to record" if (ok and not dup)
-                 else ("BLOCKED: " + "; ".join(reasons) if reasons else "BLOCKED: pose too similar")),
+                 else ("BLOCKED: " + "; ".join(reasons_ascii) if reasons_ascii
+                       else "BLOCKED: pose too similar")),
             ]
-            panels = [("LEFT + corners", draw_overlay(pair.left, res, spec), []),
-                      ("RIGHT + corners", draw_overlay(pair.right, res, spec), [])]
+            # 左图用左眼角点、右图用右眼角点（曾经两处都用左眼，导致右图叠加偏移一个视差）
+            panels = [("LEFT + corners", draw_overlay(pair.left, res, spec, side="left"), []),
+                      ("RIGHT + corners", draw_overlay(pair.right, res, spec, side="right"), [])]
             key = viewer.show_panels(panels, status_lines=status)
 
             save_now = force = False
@@ -666,7 +719,7 @@ def capture_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec)
                 cv2.imwrite(p, img)
                 files.append(p)
             p = os.path.join(out_dir, f"overlay_{idx:02d}.png")
-            cv2.imwrite(p, draw_overlay(pair.left, res, spec))
+            cv2.imwrite(p, draw_overlay(pair.left, res, spec, side="left"))
             files.append(p)
             rec = {
                 "idx": idx, "files": files, "sig": _pose_signature(pose) if pose else None,
