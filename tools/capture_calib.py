@@ -137,11 +137,20 @@ def _worst_tile_contrast(roi: np.ndarray, tiles: int = 2) -> float:
     return min(vals) if vals else 0.0
 
 
-def detect_corners(gray: np.ndarray, spec: BoardSpec, refine: bool = True
+def detect_corners(gray: np.ndarray, spec: BoardSpec, refine: bool = True, strict: bool = False
                    ) -> Tuple[bool, Optional[np.ndarray], Optional[Tuple[int, int]]]:
-    """尝试多个候选尺寸，返回 (是否检出, 角点(N,1,2) float32, 命中的尺寸)。
+    """检测棋盘角点，返回 (是否检出, 角点(N,1,2) float32, 命中的尺寸)。
 
-    用 ADAPTIVE_THRESH + NORMALIZE_IMAGE：对光照不均和玻璃反光更稳。
+    strict=True  —— **只认规格推出的那一个尺寸**（标定/采集必须用这个！）
+    strict=False —— 依次尝试多个候选尺寸（只适合"还不知道板子规格"的探测场景）
+
+    ⚠️ 为什么标定必须 strict（实测踩过）：
+        候选搜索会"退而求其次"匹配到更小的子棋盘。用户采集的 26 帧里，
+        第 20/21 帧的**右眼被匹配成 (10,8)=80 个角点**（正确是 (11,8)=88 个），
+        而物点仍按 (11,8) 生成 —— 这种尺寸不一致会**静默污染标定参数**，
+        而且在采集报告里还会被误标成"双眼可用"。严格模式下它只会"检不到"，
+        由质量门正常拦住并标为单眼帧。
+
     refine=True 时做亚像素精化（cornerSubPix）—— 正式标定必须开。
 
     注意（实测踩过）：OpenCV 5.0 的 findChessboardCorners 返回的角点形状是 (N,2)，
@@ -149,7 +158,8 @@ def detect_corners(gray: np.ndarray, spec: BoardSpec, refine: bool = True
     否则后续 `corners[:,0,0]` 之类的索引会直接抛 IndexError。
     """
     flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
-    for size in spec.candidates():
+    sizes = [spec.pattern_size] if strict else spec.candidates()
+    for size in sizes:
         ok, corners = cv2.findChessboardCorners(gray, size, flags)
         if not ok:
             continue
@@ -162,9 +172,12 @@ def detect_corners(gray: np.ndarray, spec: BoardSpec, refine: bool = True
     return False, None, None
 
 
-def analyze_pair(left_bgr: np.ndarray, right_bgr: np.ndarray, spec: BoardSpec
-                 ) -> Dict[str, Any]:
-    """对一对左右图做预检分析，返回指标字典（纯计算，不显示、不保存）。
+def analyze_pair(left_bgr: np.ndarray, right_bgr: np.ndarray, spec: BoardSpec,
+                 strict: bool = False) -> Dict[str, Any]:
+    """对一对左右图做分析，返回指标字典（纯计算，不显示、不保存）。
+
+    strict=True 时角点检测**只认规格推出的那一个尺寸**（采集/标定必须用），
+    否则会退而求其次匹配到更小的子棋盘、静默污染标定数据（详见 detect_corners 的说明）。
 
     指标：
         found_l/found_r : 左右是否检出角点
@@ -182,8 +195,8 @@ def analyze_pair(left_bgr: np.ndarray, right_bgr: np.ndarray, spec: BoardSpec
     gl = cv2.cvtColor(left_bgr, cv2.COLOR_BGR2GRAY) if left_bgr.ndim == 3 else left_bgr
     gr = cv2.cvtColor(right_bgr, cv2.COLOR_BGR2GRAY) if right_bgr.ndim == 3 else right_bgr
 
-    found_l, c_l, size_l = detect_corners(gl, spec)
-    found_r, c_r, size_r = detect_corners(gr, spec)
+    found_l, c_l, size_l = detect_corners(gl, spec, strict=strict)
+    found_r, c_r, size_r = detect_corners(gr, spec, strict=strict)
 
     bbox_w = bbox_h = px_per_square = 0.0
     pattern_contrast = 0.0
@@ -420,6 +433,8 @@ def probe_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -
                     print(f"  [读取错误] {exc}")
                     quit_all = True
                     break
+                # 预检阶段**不**用 strict：目的正是要"发现板子是多少格的"，
+                # 所以候选择尺寸搜索保留在这里（采集/标定才必须 strict）
                 res = analyze_pair(pair.left, pair.right, spec)
                 status = [
                     f"target distance: {dist:g} cm   |  {spec.describe_ascii()}",
@@ -658,7 +673,8 @@ def capture_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec)
             except CameraReadError as exc:
                 print(f"  [读取错误] {exc}")
                 break
-            res = analyze_pair(pair.left, pair.right, spec)
+            # 采集必须 strict：只认规格推出的 (11,8)，避免匹配到更小的子棋盘而静默污染数据
+            res = analyze_pair(pair.left, pair.right, spec, strict=True)
             pose = classify_pose(res, pair.left.shape[:2], spec)
             gate = gate_messages(res, thr)          # [(中文, ASCII), ...]
             ok = (len(gate) == 0)

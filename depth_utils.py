@@ -79,13 +79,18 @@ class CameraParams:
                 path = os.path.join(str(cfg.get("project", {}).get("calibration_dir", "")), os.path.basename(path))
             from calibration import load_stereo_calibration  # 阶段 5 提供
 
-            data = load_stereo_calibration(path)
+            # 运行时若"先校正再推理"，视差是在**校正后**的图上算的，
+            # 因此深度公式要用校正后的等效内参（P1）；否则用原始 K1。
+            rectified = bool(depth_cfg.get("rectify_before_infer", True))
+            data = load_stereo_calibration(path, rectified=rectified)
             return cls(
                 fx=float(data["fx"]), fy=float(data["fy"]),
                 cx=float(data["cx"]), cy=float(data["cy"]),
                 baseline_m=float(data["baseline_m"]),
                 calibrated=True,
-                source=f"标定文件 {path}（标定日期 {data.get('date', '未知')}）",
+                source=(f"标定文件 {path}（标定日期 {data.get('date', '未知')}；"
+                        f"{'校正后' if rectified else '原始'}内参；"
+                        f"双目 RMS {data.get('rms_stereo_px', 0):.3f} px）"),
                 width=int(data.get("width", 0)), height=int(data.get("height", 0)),
             )
 
@@ -144,6 +149,35 @@ class CameraParams:
             f"{state} | fx={self.fx:.2f} fy={self.fy:.2f} cx={self.cx:.2f} cy={self.cy:.2f} "
             f"baseline={self.baseline_m:.4f} m | {self.width}x{self.height} | 来源: {self.source}"
         )
+
+
+# -----------------------------------------------------------------------------
+# 运行时校正（去畸变 + 行对齐）
+# -----------------------------------------------------------------------------
+def load_rectifier(cfg: Dict[str, Any]):
+    """按配置返回一个"左右图校正器"，不需要校正时返回 None。
+
+    什么时候需要：
+        depth.calibrated = true 且 depth.rectify_before_infer = true
+        —— 双目标定完成后，先用标定得到的映射表把左右图去畸变并对齐到同一行，
+           再送进 FFS 算视差。这样视差才与"校正后内参 P1"配套，深度才准。
+
+    返回的对象提供 .rectify_pair(left, right) -> (left_rect, right_rect)，
+    并提供 .summary() 与 .baseline_m / .rect_fx 供状态栏显示。
+    """
+    depth_cfg = cfg.get("depth", {}) or {}
+    if not bool(depth_cfg.get("calibrated", False)):
+        return None
+    if not bool(depth_cfg.get("rectify_before_infer", True)):
+        return None
+    path = str(depth_cfg.get("calibration_file", ""))
+    if not os.path.isabs(path):
+        path = os.path.join(str(cfg.get("project", {}).get("calibration_dir", "")), os.path.basename(path))
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"配置要求启用校正，但标定文件不存在：{path}")
+    from calibration import StereoCalibration
+
+    return StereoCalibration.load(path)
 
 
 # -----------------------------------------------------------------------------

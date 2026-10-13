@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 import yaml
 
-from camera import (CameraError, CameraReadError, StereoCamera, frame_sharpness,
+from camera import (CameraError, CameraReadError, FramePair, StereoCamera, frame_sharpness,
                     list_video_devices_from_registry, quick_probe_index)
 from viewer import StereoViewer
 
@@ -324,6 +324,14 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     from stereo_depth import FFSError, FFSDepthEstimator
     from viewer import DisparityColorizer
 
+    # 阶段 5：加载"左右图校正器"（已标定且开启 rectify_before_infer 时才有）
+    rectifier = None
+    try:
+        from depth_utils import load_rectifier
+        rectifier = load_rectifier(cfg)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [校正] 加载失败，将用原始图像推理：{exc}")
+
     ffs_cfg = dict(cfg.get("ffs", {}))
     if getattr(args, "scale", None) is not None:
         ffs_cfg["scale"] = float(args.scale)
@@ -344,7 +352,11 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     print("=" * 88)
     print(f"  ffs.scale={ffs_cfg.get('scale')}  valid_iters={ffs_cfg.get('valid_iters')}  "
           f"max_disp={ffs_cfg.get('max_disp')}  build_volume={ffs_cfg.get('build_volume')}")
-    print("  [警告] 当前未标定：视差仅用于流程验证，**不具备测量意义**（不能测距/测尺寸/定位）")
+    if rectifier is not None:
+        print(f"  [校正] 已启用去畸变+行对齐：基线 {rectifier.baseline_m*1000:.3f} mm，"
+              f"校正后 fx={rectifier.rect_fx:.1f}，双目 RMS={rectifier.rms_stereo:.4f} px")
+    else:
+        print("  [警告] 未启用校正（未标定或 rectify_before_infer=false）：视差不具备测量意义")
 
     est = FFSDepthEstimator(cfg["project"], ffs_cfg)
     ok, msg = est.weights_ready()
@@ -390,6 +402,10 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     print(f"[读取错误] {exc}")
                     break
                 last_left, last_right = pair.left, pair.right
+                # 阶段 5：已标定且启用时，先做去畸变+行对齐再送模型
+                # （视差是在校正后的图上算的，必须与校正后内参 P1 配套使用）
+                if rectifier is not None:
+                    last_left, last_right = rectifier.rectify_pair(last_left, last_right)
                 try:
                     out = est.infer(last_left, last_right)
                 except FFSError as exc:
@@ -434,7 +450,9 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 f"valid disparity {valid_ratio:.1f}% | display range {lo:.1f}..{hi:.1f} px",
                 f"max_disp={est.max_disp} valid_iters={est.valid_iters} | sharpness {sharpness:.0f} "
                 f"({'OK' if sharpness >= 30 else 'TOO BLURRY'}) | "
-                f"UNCALIBRATED: no intrinsics, no rectification - NOT for measurement",
+                + (f"CALIBRATED: rectified, fx={rectifier.rect_fx:.1f}, "
+                   f"baseline={rectifier.baseline_m*1000:.2f}mm" if rectifier is not None else
+                   "UNCALIBRATED: no intrinsics, no rectification - NOT for measurement"),
             ]
 
             if args.no_display:
@@ -442,10 +460,12 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     print(f"  [帧 {n_processed}] " + " | ".join(status[:2]))
                 key = -1
             else:
+                _tag = "rectified" if rectifier is not None else "raw, unrectified"
                 panels = [
-                    ("LEFT (raw, unrectified)", last_left, [f"{last_left.shape[1]}x{last_left.shape[0]}"]),
-                    ("RIGHT (raw, unrectified)", last_right, [f"{last_right.shape[1]}x{last_right.shape[0]}"]),
-                    ("DISPARITY (px, uncalibrated)", disp_panel, []),
+                    (f"LEFT ({_tag})", last_left, [f"{last_left.shape[1]}x{last_left.shape[0]}"]),
+                    (f"RIGHT ({_tag})", last_right, [f"{last_right.shape[1]}x{last_right.shape[0]}"]),
+                    (f"DISPARITY (px, {'calibrated' if rectifier is not None else 'uncalibrated'})",
+                     disp_panel, []),
                 ]
                 key = viewer.show_panels(panels, status_lines=status, paused=paused)
 
@@ -588,9 +608,16 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     输出：进程退出码
     """
     from depth_utils import (CameraParams, colorize_depth, depth_stats,
-                             disparity_to_depth, filter_speckles, save_depth_npy)
+                             disparity_to_depth, filter_speckles, load_rectifier, save_depth_npy)
     from pointcloud import PointCloudBuilder
     from stereo_depth import FFSError, FFSDepthEstimator
+
+    # 阶段 5：加载"左右图校正器"（已标定且开启 rectify_before_infer 时才有）
+    rectifier = None
+    try:
+        rectifier = load_rectifier(cfg)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [校正] 加载失败，将用原始图像推理：{exc}")
 
     # Open3D 体积大、导入慢，只在点云模式里按需导入（预览/视差模式不必付这个开销）
     try:
@@ -708,6 +735,13 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 except CameraReadError as exc:
                     print(f"[读取错误] {exc}")
                     break
+                # 阶段 5：已标定且启用时，先做去畸变+行对齐再送模型
+                # （点云用左图着色，所以 pair.left/right 也要一起换成校正后的图，
+                #   否则颜色会与深度错位）
+                if rectifier is not None:
+                    _l, _r = rectifier.rectify_pair(pair.left, pair.right)
+                    pair = FramePair(_l, _r, pair.t_left, pair.t_right,
+                                     pair.seq, pair.mode, pair.synced)
                 try:
                     out = est.infer(pair.left, pair.right)
                 except FFSError as exc:
