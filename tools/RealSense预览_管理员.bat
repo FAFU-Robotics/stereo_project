@@ -73,5 +73,9 @@ echo ------------------------------------------------------------
 echo   Exit code: %ERRORLEVEL%
 echo   0 = ok, 2 = device/open problem, 5 = missing python package
 echo ------------------------------------------------------------
+echo   Full output is also saved to:
+echo     output\realsense\last_run.log
+echo   If a window flashed and closed, send that log file.
+echo ------------------------------------------------------------
 pause
 endlocal

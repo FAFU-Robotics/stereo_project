@@ -60,9 +60,24 @@ from viewer import StereoViewer                                        # noqa: E
 try:
     import pyrealsense2 as rs
 except ImportError:
-    print("[错误] 没有安装 pyrealsense2。请先安装：")
-    print('  "D:\\31931\\Documents\\python312\\python.exe" -m pip install pyrealsense2')
-    print("  若 pip 因权限/临时目录失败，可改成：下载 wheel 后用 zip 解压到 site-packages（见对话记录）。")
+    _msg = [
+        "[错误] 没有安装 pyrealsense2（或用了别的 Python 解释器）。",
+        f"       当前解释器: {sys.executable}",
+        '       安装（用项目自带的 Python）:',
+        '       "D:\\31931\\Documents\\python312\\python.exe" -m pip install pyrealsense2',
+        "       若 pip 因权限/临时目录失败，可改成：下载 wheel 后用 zip 解压到 site-packages（见对话记录）。",
+    ]
+    for _l in _msg:
+        print(_l)
+    # 这种失败也会让窗口"一闪就没"，所以同样落一份日志
+    try:
+        _lp = os.path.join(PROJECT_ROOT, "output", "realsense", "last_run.log")
+        os.makedirs(os.path.dirname(_lp), exist_ok=True)
+        with open(_lp, "w", encoding="utf-8") as _fh:
+            _fh.write("\n".join(_msg) + f"\nPython: {sys.version}\n")
+        print(f"[日志] 已写入: {_lp}")
+    except Exception:
+        pass
     sys.exit(5)
 
 
@@ -129,6 +144,20 @@ def factory_params(profile) -> Tuple[CameraParams, Dict[str, Any]]:
     meta = {"model": str(intr.model), "coeffs": list(intr.coeffs),
             "depth_to_color_m": baseline_m}
     return params, meta
+
+
+def is_admin() -> bool:
+    """当前进程是否以管理员权限运行。
+
+    为什么要打印它：本机实测普通权限进程打不开物理相机；而且 RealSense SDK 还需要
+    创建命名互斥体。用户如果直接双击 .py（或用错 Python）就会"窗口一闪就没了"，
+    启动时把这一行打出来能立刻暴露这类问题。
+    """
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 def print_check() -> int:
@@ -231,6 +260,7 @@ def run_view(a: argparse.Namespace) -> int:
         calibrated=True)
 
     vis = disp_pcd = None
+    vis_added = False          # 【必须放在循环外】记录几何体是否已加入窗口
     _flip_y = np.array([1.0, -1.0, 1.0])
     last: Dict[str, Any] = {}
     paused = False
@@ -316,21 +346,34 @@ def run_view(a: argparse.Namespace) -> int:
                         "valid_ratio": valid_ratio, "median_m": med}
 
                 if vis is not None:
-                    pts = np.asarray(pcd.points)
-                    if len(pts):
-                        pts = pts * _flip_y          # 只翻显示
-                    disp_pcd.points = o3d.utility.Vector3dVector(pts)
-                    disp_pcd.colors = pcd.colors
-                    if not last.get("vis_added"):
-                        vis.add_geometry(disp_pcd)
-                        last["vis_added"] = True
-                    if pc_stats["points"] > 0:
-                        vis.update_geometry(disp_pcd)
-                    if not vis.poll_events():
-                        print("  3D 窗口已关闭（预览继续；按 o 可重开）")
+                    try:
+                        pts = np.asarray(pcd.points)
+                        if len(pts):
+                            pts = pts * _flip_y          # 只翻显示
+                        disp_pcd.points = o3d.utility.Vector3dVector(pts)
+                        disp_pcd.colors = pcd.colors
+                        # 只在**第一次**加入几何体；重复 add_geometry 会让窗口崩掉/卡死
+                        # （这是本工具第一版的真 bug：vis_added 存在每帧重建的 last 里，
+                        #   导致每帧都调用一次 add_geometry）
+                        if not vis_added:
+                            vis.add_geometry(disp_pcd)
+                            vis_added = True
+                        if pc_stats["points"] > 0:
+                            vis.update_geometry(disp_pcd)
+                        if not vis.poll_events():
+                            print("  3D 窗口已关闭（预览继续；按 o 可重开）")
+                            vis = None
+                        else:
+                            vis.update_renderer()
+                    except Exception as exc:  # noqa: BLE001
+                        # 3D 渲染出问题不应该把整个预览带崩：记录并关掉 3D 窗口继续跑
+                        print(f"  [3D 窗口异常] {type(exc).__name__}: {exc}")
+                        print("  已关闭 3D 窗口，继续 2D 预览（可用 --no-cloud-window 完全跳过）")
+                        try:
+                            vis.destroy_window()
+                        except Exception:
+                            pass
                         vis = None
-                    else:
-                        vis.update_renderer()
 
             if not last:
                 continue
@@ -362,7 +405,7 @@ def run_view(a: argparse.Namespace) -> int:
                 viewer.toggle_help()
             if key == ord("o") and vis is None and not a.no_cloud_window:
                 vis = open_cloud_window()
-                last["vis_added"] = False
+                vis_added = False          # 新窗口里需要重新 add_geometry 一次
                 print("  3D 窗口已重新打开")
             if StereoViewer.is_snapshot(key):
                 d = time.strftime("%Y%m%d_%H%M%S")
@@ -444,6 +487,57 @@ def colorize_depth(depth_m: np.ndarray, valid: np.ndarray, zmin: float, zmax: fl
 
 
 # -----------------------------------------------------------------------------
+# 日志：把控制台输出同时写进文件
+# 为什么要它：用户实测"启动后窗口自动退出了"，控制台里的报错来不及看就没了。
+# 有了日志文件，即使窗口闪退，也能把 output\realsense\last_run.log 拿来定位。
+# -----------------------------------------------------------------------------
+class _Tee:
+    """把写入同时送到原控制台和日志文件。"""
+
+    def __init__(self, stream, path: str):
+        self._stream = stream
+        self._path = path
+        self._fh = open(path, "a", encoding="utf-8", errors="replace")
+
+    def write(self, data: str) -> int:
+        try:
+            self._stream.write(data)
+        except Exception:
+            pass
+        try:
+            self._fh.write(data)
+            self._fh.flush()
+        except Exception:
+            pass
+        return len(data)
+
+    def flush(self) -> None:
+        for obj in (self._stream, self._fh):
+            try:
+                obj.flush()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
+
+
+def install_log(path: str) -> str:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:      # 每次运行重新开始，避免越积越大
+        fh.write("")
+    sys.stdout = _Tee(sys.stdout, path)
+    sys.stderr = _Tee(sys.stderr, path)
+    return path
+
+
+# -----------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Intel RealSense 深度相机实时预览（深度 + 彩色点云）")
     ap.add_argument("--check", action="store_true", help="只枚举设备并打印出厂参数，不启动视频流")
@@ -461,9 +555,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--display-scale", type=float, default=None, help="2D 显示缩放")
     a = ap.parse_args(argv)
 
-    if a.check:
-        return print_check()
-    return run_view(a)
+    log_path = install_log(os.path.join(PROJECT_ROOT, "output", "realsense", "last_run.log"))
+    admin = is_admin()
+    print("=" * 88)
+    print(f"  RealSense 预览   启动于 {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Python     : {sys.executable}")
+    print(f"  管理员权限 : {'是 (OK)' if admin else '否 (!!) 请改用 tools\\RealSense预览_管理员.bat 启动'}")
+    print(f"  本次输出同时写入日志: {log_path}")
+    print("=" * 88)
+    if not admin:
+        print("  [警告] 当前不是管理员权限：本机普通权限进程打不开物理相机，")
+        print("         RealSense SDK 也会报 CreateNamedMutex / 访问被拒。")
+        print("         请双击 tools\\RealSense预览_管理员.bat（会自动请求提权）。")
+    try:
+        rc = print_check() if a.check else run_view(a)
+    except KeyboardInterrupt:
+        print("\n  收到 Ctrl+C，退出")
+        rc = 0
+    except BaseException:                     # noqa: BLE001
+        import traceback
+        print("\n" + "!" * 88)
+        print("  [崩溃] 下面是完整堆栈（这张日志已存盘，可直接发给我定位）:")
+        traceback.print_exc()
+        print("!" * 88)
+        rc = 9
+    print(f"\n[日志] 本次输出已保存在: {log_path}")
+    print("[提示] 如果窗口一闪就没了，把上面这个 last_run.log 发我即可定位。")
+    for s in (sys.stdout, sys.stderr):
+        if isinstance(s, _Tee):
+            s.flush()
+    return rc
 
 
 if __name__ == "__main__":
