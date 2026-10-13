@@ -716,17 +716,37 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
               按 o 可以随时重新打开。
             """
             v = o3d.visualization.Visualizer()
-            v.create_window(window_name="stereo_project point cloud" +
-                            ("" if params_full.calibrated else "  [UNCALIBRATED]"),
+            v.create_window(window_name="stereo_project point cloud  "
+                                       "(display: Y up | file: Y down camera frame)"
+                                       + ("" if params_full.calibrated else "  [UNCALIBRATED]"),
                             width=int(args.cloud_window), height=int(args.cloud_window))
             ro = v.get_render_option()
             ro.point_size = float(args.point_size)
             ro.background_color = np.array([0.08, 0.08, 0.10])
             return v
 
+        # ---- 显示用点云：把 y 取反，让"相机坐标系"在 Open3D 里正着显示 --------------
+        # 为什么需要：我们的点云按 OpenCV/相机光学坐标系保存（x 右、y 下、z 前），
+        # 而 Open3D 的视图把 +y 当作"上"，直接显示会整个上下颠倒（用户实测反馈）。
+        # 这里**只翻显示**：数据（含保存的 PLY、depth_meter.npy、反投影）保持 y 向下不变，
+        # 窗口标题里也写明了这一点，避免两套约定混用。
+        disp_pcd = o3d.geometry.PointCloud()
+        _flip_y = np.array([1.0, -1.0, 1.0])
+
+        def update_display_cloud(src):
+            """把数据点云(src, y 向下)复制进显示点云(y 向上)；复用同一个对象。"""
+            pts = np.asarray(src.points)
+            if len(pts):
+                pts = pts * _flip_y
+            disp_pcd.points = o3d.utility.Vector3dVector(pts)
+            disp_pcd.colors = src.colors        # 颜色按引用共享，不额外拷贝
+            return disp_pcd
+
         if not args.no_cloud_window:
             vis = open_cloud_window()
             print("  3D 点云窗口已打开（关掉它不会结束演示；按 o 可重开，按 q 退出）")
+            print("  显示说明：窗口里把 y 轴翻成【向上】以便观看；"
+                  "保存的点云/深度数据仍按相机坐标系（y 向下）")
 
         while True:
             if not paused:
@@ -797,17 +817,18 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                         "stats": st, "pc_stats": pc_stats, "infer_ms": out["timings_ms"]["infer"],
                         "pc_ms": pc_ms, "extrap_pct": extrap_pct, "speckle_pct": speckle_pct}
 
-                # Open3D：复用几何体；点云为空时不要更新（否则每帧都会刷
-                # "The number of points is 0 when creating axis-aligned bounding box"）
+                # Open3D：用**显示用点云**（y 取反，正着看）；点云为空时不要更新
+                # （否则每帧都会刷 "The number of points is 0 when creating axis-aligned bounding box"）
                 if vis is not None:
-                    if pcd is not last_pcd:
+                    vis_obj = update_display_cloud(pcd)
+                    if vis_obj is not last_pcd:
                         if last_pcd is not None and vis_added:
                             vis.remove_geometry(last_pcd)
-                        vis.add_geometry(pcd)
+                        vis.add_geometry(vis_obj)
                         vis_added = True
-                        last_pcd = pcd
+                        last_pcd = vis_obj
                     if pc_stats["points"] > 0:
-                        vis.update_geometry(pcd)
+                        vis.update_geometry(vis_obj)
                     elif n_processed % 30 == 1:
                         # 空点云时给出可操作的诊断，而不是让用户看 Open3D 的警告刷屏
                         print(f"  [点云为空] 本帧 {pc_stats['filtered_points']} 个点全部被深度范围过滤掉了：")

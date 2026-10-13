@@ -117,6 +117,11 @@ python main.py --mode pointcloud --voxel 0.005                   REM 启用体�
 REM ★ 实时演示不会自己停止：只有按下 q / ESC（或 Ctrl+C）才会退出。
 REM   关掉 Open3D 的 3D 窗口也只是收起 3D 视图，演示继续；按 o 可以重新打开。
 REM   窗口内按键：q/ESC=退出  p/空格=暂停  s=保存  i=状态  h=帮助  o=重开 3D 窗口
+REM
+REM 关于点云的"上下颠倒"：我们按 **相机光学坐标系**（x 右、y 下、z 前）存储点云与深度，
+REM   而 Open3D 的视图把 +y 当作"上"，所以直接显示会上下颠倒。
+REM   处理方式：**只在 3D 窗口里把 y 翻过来显示**（窗口标题已注明），
+REM   保存的 PLY / depth_meter.npy 等数据**仍是相机坐标系**，不做翻转。
 
 REM ⑤ 无窗口自检（**仅用于自动化验证**：跑 N 帧后自动退出，不是演示模式）
 REM    只有显式写 --max-frames / --duration 才会自动退出；演示菜单里都不带这两个参数
