@@ -182,12 +182,14 @@ def analyze_pair(left_bgr: np.ndarray, right_bgr: np.ndarray, spec: BoardSpec
     bbox_w = bbox_h = px_per_square = 0.0
     pattern_contrast = 0.0
     pattern_contrast_min = 0.0
-    if found_l and c_l is not None:
-        pts = np.asarray(c_l, dtype=np.float32).reshape(-1, 2)   # 兼容 (N,1,2) 与 (N,2)
+    # 优先用左眼算尺寸；若只有右眼检出，就用右眼（否则"只有右眼"的帧会显示每格 0 px）
+    src_corners, src_size = (c_l, size_l) if found_l else (c_r, size_r)
+    if src_corners is not None:
+        pts = np.asarray(src_corners, dtype=np.float32).reshape(-1, 2)   # 兼容 (N,1,2) 与 (N,2)
         xs, ys = pts[:, 0], pts[:, 1]
         bbox_w = float(xs.max() - xs.min())
         bbox_h = float(ys.max() - ys.min())
-        cols_minus_1 = max((size_l[0] - 1) if size_l else (spec.pattern_size[0] - 1), 1)
+        cols_minus_1 = max((src_size[0] - 1) if src_size else (spec.pattern_size[0] - 1), 1)
         px_per_square = bbox_w / cols_minus_1
         # 角点外接框内再各留半格余量，取该区域作为"图案区"
         pad = max(int(px_per_square * 0.5), 2)
@@ -364,12 +366,15 @@ def probe_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -
 
     cam = StereoCamera(cfg.get("camera", {}))
     rows: List[Dict[str, Any]] = []
+    quit_all = False
     try:
         cam.open()
         print(f"  相机已打开: {cam.describe()}  单眼 {cam.eye_size[0]}x{cam.eye_size[1]}")
         os.makedirs(out_dir, exist_ok=True)
 
         for dist in distances:
+            if quit_all:
+                break
             print(f"\n  >>> 请把标定板放在【{dist:g} cm】处、正对相机、亮度正常，然后按空格…")
             captured = False
             while not captured:
@@ -377,6 +382,7 @@ def probe_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -
                     pair = cam.read()
                 except CameraReadError as exc:
                     print(f"  [读取错误] {exc}")
+                    quit_all = True
                     break
                 res = analyze_pair(pair.left, pair.right, spec)
                 status = [
@@ -392,8 +398,10 @@ def probe_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -
                 key = viewer.show_panels(panels, status_lines=status)
 
                 if StereoViewer.is_quit(key):
-                    print("  收到退出按键，结束预检")
-                    return 0
+                    print("  收到退出按键，结束预检（仍会写出总结与报告）")
+                    captured = True      # 跳出当前距离的等待
+                    quit_all = True
+                    break
                 if key == ord(" "):
                     rows.append({"dist_cm": dist, **{k: v for k, v in res.items()
                                                      if k not in ("corners_l", "corners_r")}})
@@ -458,10 +466,295 @@ def probe_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -
 
 
 # -----------------------------------------------------------------------------
+# 姿态分类（只用于采集时的清单进度与去重，**不参与标定计算**）
+# -----------------------------------------------------------------------------
+def classify_pose(res: Dict[str, Any], shape: Tuple[int, int], spec: BoardSpec
+                  ) -> Optional[Dict[str, Any]]:
+    """把当前姿态分类成"画面区域 + 倾斜方向/角度"，供采集清单进度与去重使用。
+
+    ⚠️ 这里用的是**占位内参**（fx=fy=500），所以角度只是**粗略分类**用途，
+       绝不参与标定计算 —— 标定用的内参由 calibration.py 从角点严格解算。
+    """
+    corners = res.get("corners_l") if res.get("found_l") else res.get("corners_r")
+    if corners is None:
+        return None
+    h, w = shape[:2]
+    K = np.array([[500.0, 0.0, w / 2.0], [0.0, 500.0, h / 2.0], [0.0, 0.0, 1.0]], np.float64)
+    objp = spec.object_points().reshape(-1, 1, 3).astype(np.float64)
+    imgp = np.asarray(corners, np.float64).reshape(-1, 1, 2)
+    try:
+        ok, rvec, _ = cv2.solvePnP(objp, imgp, K, None, flags=cv2.SOLVEPNP_ITERATIVE)
+    except cv2.error:
+        return None
+    if not ok:
+        return None
+    R, _ = cv2.Rodrigues(rvec)
+    n = R[:, 2]                                   # 板面法向（相机坐标系）
+    tilt = float(np.degrees(np.arccos(np.clip(abs(float(n[2])), -1.0, 1.0))))
+    tilt_dir = "none"
+    if tilt >= 15.0:
+        if abs(float(n[0])) >= abs(float(n[1])):
+            tilt_dir = "left" if float(n[0]) < 0 else "right"
+        else:
+            tilt_dir = "up" if float(n[1]) < 0 else "down"
+    pts = np.asarray(corners, np.float32).reshape(-1, 2)
+    cx = float(pts[:, 0].mean()) / w
+    cy = float(pts[:, 1].mean()) / h
+    if 0.32 <= cx <= 0.68 and 0.32 <= cy <= 0.68:
+        region = "center"
+    elif cy < 0.5:
+        region = "tl" if cx < 0.5 else "tr"
+    else:
+        region = "bl" if cx < 0.5 else "br"
+    return {"region": region, "tilt_deg": tilt, "tilt_dir": tilt_dir, "cx": cx, "cy": cy}
+
+
+# 采集清单：配置里的中文键 -> 判定规则（同一个姿态可同时计入"区域"和"倾斜"两类）
+CHECK_RULES = {
+    "中心正对": lambda p: p["region"] == "center" and p["tilt_deg"] < 20,
+    "左上角": lambda p: p["region"] == "tl",
+    "右上角": lambda p: p["region"] == "tr",
+    "左下角": lambda p: p["region"] == "bl",
+    "右下角": lambda p: p["region"] == "br",
+    "左倾大于20度": lambda p: p["tilt_deg"] >= 20 and p["tilt_dir"] == "left",
+    "右倾大于20度": lambda p: p["tilt_deg"] >= 20 and p["tilt_dir"] == "right",
+    "上仰大于20度": lambda p: p["tilt_deg"] >= 20 and p["tilt_dir"] == "up",
+    "下俯大于20度": lambda p: p["tilt_deg"] >= 20 and p["tilt_dir"] == "down",
+}
+
+
+def quality_gate(res: Dict[str, Any], thr: Dict[str, float]) -> Tuple[bool, List[str]]:
+    """采集质量门：返回 (是否通过, 不通过的原因列表)。
+
+    注意：**只单眼检出也允许通过**（那一帧仍能用于该眼的单眼内参标定），
+    但会在记录里标记为 single-eye，双目外参只用双眼都检出的帧。
+    """
+    reasons: List[str] = []
+    if not res["found_l"] and not res["found_r"]:
+        reasons.append("左右眼都没检出角点（太远/太斜/反光/模糊）")
+        return False, reasons
+    if res["px_per_square"] < thr["min_px_per_square"]:
+        reasons.append(f"图案太小：每格 {res['px_per_square']:.1f} < {thr['min_px_per_square']:g} px（靠近一点）")
+    if res["sharpness"] < thr["min_sharpness"]:
+        reasons.append(f"太糊：清晰度 {res['sharpness']:.0f} < {thr['min_sharpness']:g}")
+    if res["pattern_contrast_min"] < thr["min_contrast"]:
+        reasons.append(f"对比度不足：最差区域 {res['pattern_contrast_min']:.0f} < {thr['min_contrast']:g}"
+                       f"（多半是反光，试试把板略微倾斜）")
+    return (len(reasons) == 0), reasons
+
+
+def _pose_signature(pose: Dict[str, Any]) -> Tuple:
+    """把姿态压成一个粗粒度签名，用于"这张和之前那张太像"的去重判断。"""
+    return (pose["region"], int(pose["tilt_deg"] // 12), int(pose["tilt_dir"] != "none"),
+            int(pose["cx"] * 8), int(pose["cy"] * 8))
+
+
+def _checklist_lines(records: Sequence[Dict[str, Any]], checklist: Dict[str, int]) -> List[str]:
+    """按清单统计已采集数量，返回显示用文本行。"""
+    lines = []
+    for name, need in checklist.items():
+        rule = CHECK_RULES.get(name)
+        got = sum(1 for r in records if r.get("pose") and rule and rule(r["pose"])) if rule else 0
+        mark = "OK " if got >= need else "   "
+        lines.append(f"  {mark}{name:<12} {got}/{need}")
+    return lines
+
+
+# -----------------------------------------------------------------------------
+# 模式三：正式采集（需要相机 + 管理员权限）
+# -----------------------------------------------------------------------------
+def capture_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -> int:
+    cal = dict(cfg.get("calibration", {}) or {})
+    thr = {
+        "min_px_per_square": float(cal.get("min_px_per_square", PX_PER_SQUARE_MIN)),
+        "min_sharpness": float(cal.get("min_sharpness", SHARP_MIN)),
+        "min_contrast": float(cal.get("min_contrast", CONTRAST_MIN)),
+    }
+    checklist = dict(cal.get("checklist", {}) or {})
+    target = int(cal.get("target_frames", 26))
+    dmin, dmax = cal.get("distance_min_cm", 9), cal.get("distance_max_cm", 17)
+
+    out_dir = os.path.join(PROJECT_ROOT, "output", "calib", time.strftime("%Y%m%d_%H%M%S"))
+    runtime = cfg.get("runtime", {})
+    viewer = StereoViewer(window_name="capture_calib (capture)",
+                          display_scale=float(args.display_scale or runtime.get("display_scale", 1.0)))
+
+    print("=" * 88)
+    print("  标定图采集（步骤 1）")
+    print("=" * 88)
+    print(f"  板子规格  : {spec.describe()}")
+    print(f"  工作距离  : {dmin:g} ~ {dmax:g} cm（预检实测的可用区间）")
+    print(f"  目标张数  : {target}")
+    print(f"  质量门    : 每格 >= {thr['min_px_per_square']:g} px、清晰度 >= {thr['min_sharpness']:g}、"
+          f"对比度 >= {thr['min_contrast']:g}")
+    print("  操作      : 【空格】记录一帧（不达标会被拒绝并说明原因）")
+    print("              【u】撤销上一张   【f】强制记录（跳过质量门）   【q】结束并写报告")
+    print("  提示      : 近距离视差很大，板要放在画面偏中右的位置，才能同时被左右眼看到")
+    print("-" * 88)
+    print("  采集清单（实时更新）:")
+    for ln in _checklist_lines([], checklist):
+        print(ln)
+    print("-" * 88)
+
+    cam = StereoCamera(cfg.get("camera", {}))
+    records: List[Dict[str, Any]] = []
+    sigs: set = set()
+    try:
+        cam.open()
+        print(f"  相机已打开: {cam.describe()}  单眼 {cam.eye_size[0]}x{cam.eye_size[1]}")
+        os.makedirs(out_dir, exist_ok=True)
+
+        while True:
+            try:
+                pair = cam.read()
+            except CameraReadError as exc:
+                print(f"  [读取错误] {exc}")
+                break
+            res = analyze_pair(pair.left, pair.right, spec)
+            pose = classify_pose(res, pair.left.shape[:2], spec)
+            ok, reasons = quality_gate(res, thr)
+            dup = bool(pose) and (_pose_signature(pose) in sigs)
+            both = bool(res["found_l"] and res["found_r"])
+
+            pose_txt = (f"region {pose['region']}  tilt {pose['tilt_deg']:.0f}deg {pose['tilt_dir']}"
+                        if pose else "pose: -")
+            status = [
+                f"target distance {dmin:g}-{dmax:g} cm   |   saved {len(records)}/{target}",
+                f"corners L/R: {'OK' if res['found_l'] else '--'} / {'OK' if res['found_r'] else '--'}"
+                f"   {'(stereo ok)' if both else '(single eye only)'}   {pose_txt}",
+                f"px per square: {res['px_per_square']:.1f}   sharpness: {res['sharpness']:.0f}   "
+                f"contrast worst: {res['pattern_contrast_min']:.0f}",
+                ("READY: press SPACE to record" if (ok and not dup)
+                 else ("BLOCKED: " + "; ".join(reasons) if reasons else "BLOCKED: pose too similar")),
+            ]
+            panels = [("LEFT + corners", draw_overlay(pair.left, res, spec), []),
+                      ("RIGHT + corners", draw_overlay(pair.right, res, spec), [])]
+            key = viewer.show_panels(panels, status_lines=status)
+
+            save_now = force = False
+            if StereoViewer.is_quit(key):
+                print("  收到退出按键，结束采集")
+                break
+            if key == ord(" "):
+                save_now = True
+            if key == ord("f"):
+                save_now, force = True, True
+            if key == ord("u") and records:
+                last = records.pop()
+                sigs.discard(last["sig"])
+                for p in last["files"]:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+                print(f"  已撤销第 {last['idx']} 张（删除 {len(last['files'])} 个文件）")
+                continue
+            if not save_now:
+                continue
+
+            if not force and reasons:
+                print("  ❌ 拒绝记录：" + "; ".join(reasons))
+                continue
+            if not force and dup:
+                print("  ❌ 这张与已有帧姿态太接近，请换个角度/位置（确实要留请按 f 强制记录）")
+                continue
+
+            idx = len(records) + 1
+            files = []
+            for tag, img in (("left", pair.left), ("right", pair.right)):
+                p = os.path.join(out_dir, f"{tag}_{idx:02d}.png")
+                cv2.imwrite(p, img)
+                files.append(p)
+            p = os.path.join(out_dir, f"overlay_{idx:02d}.png")
+            cv2.imwrite(p, draw_overlay(pair.left, res, spec))
+            files.append(p)
+            rec = {
+                "idx": idx, "files": files, "sig": _pose_signature(pose) if pose else None,
+                "pose": pose, "stereo": both,
+                "px_per_square": res["px_per_square"], "sharpness": res["sharpness"],
+                "contrast": res["pattern_contrast_min"], "bbox_w": res["bbox_w"],
+                "found_l": res["found_l"], "found_r": res["found_r"],
+                "levels": (res["level"], len(reasons), force, dup),
+            }
+            records.append(rec)
+            if rec["sig"]:
+                sigs.add(rec["sig"])
+            flag = "强制" if force else ("双眼" if both else "仅单眼")
+            print(f"  ✅ 已记录第 {idx:02d} 张 [{flag}]：每格 {res['px_per_square']:.1f} px  "
+                  f"清晰度 {res['sharpness']:.0f}  对比度 {res['pattern_contrast_min']:.0f}  "
+                  f"{pose_txt}")
+            if idx % 5 == 0 or idx == target:
+                print("  采集清单:")
+                for ln in _checklist_lines(records, checklist):
+                    print(ln)
+
+    except CameraError as exc:
+        print(f"[相机错误] {exc}")
+        cam.close()
+        viewer.close()
+        return 2
+    except KeyboardInterrupt:
+        print("\n  收到 Ctrl+C，结束采集")
+    finally:
+        cam.close()
+        viewer.close()
+
+    # ------------------------------------------------- 总结与报告（一定写出）
+    stereo_n = sum(1 for r in records if r["stereo"])
+    print("\n" + "=" * 88)
+    print("  采集总结")
+    print("=" * 88)
+    print(f"  共采集        : {len(records)} 对（目标 {target}）")
+    print(f"  双眼都检出    : {stereo_n} 对（用于双目外参标定）")
+    print(f"  仅单眼检出    : {len(records) - stereo_n} 对（只用于该眼的单眼内参）")
+    print(f"  每格像素      : {min([r['px_per_square'] for r in records], default=0):.1f} ~ "
+          f"{max([r['px_per_square'] for r in records], default=0):.1f}")
+    print("  清单完成情况:")
+    missing = []
+    for name, need in checklist.items():
+        rule = CHECK_RULES.get(name)
+        got = sum(1 for r in records if r["pose"] and rule and rule(r["pose"])) if rule else 0
+        flag = "OK " if got >= need else "缺 "
+        print(f"    {flag}{name:<12} {got}/{need}")
+        if got < need:
+            missing.append(f"{name}({got}/{need})")
+    if missing:
+        print(f"  ⚠️ 还缺: {', '.join(missing)}")
+        print("     缺的类别会削弱标定质量（尤其是四角→畸变、倾斜→焦距），建议补齐后再算参数")
+    else:
+        print("  ✅ 清单已全部满足")
+    if len(records) < 10:
+        print("  ⚠️ 张数偏少（<10），标定结果可能不稳，建议至少 16~20 对")
+
+    if records:
+        rep = os.path.join(out_dir, "capture_report.txt")
+        with open(rep, "w", encoding="utf-8") as fh:
+            fh.write(f"# 标定图采集记录\n板子: {spec.describe()}\n")
+            fh.write(f"工作距离建议: {dmin:g}~{dmax:g} cm\n")
+            fh.write(f"质量门: 每格>={thr['min_px_per_square']:g}px 清晰度>={thr['min_sharpness']:g} "
+                     f"对比度>={thr['min_contrast']:g}\n\n")
+            fh.write("idx  双眼  每格px  清晰度  对比度  区域    倾角  方向\n")
+            for r in records:
+                p = r["pose"] or {}
+                fh.write(f"{r['idx']:>3}  {'Y' if r['stereo'] else 'N':>4}  "
+                         f"{r['px_per_square']:>6.1f}  {r['sharpness']:>6.0f}  {r['contrast']:>6.0f}  "
+                         f"{p.get('region', '-'):<7} {p.get('tilt_deg', 0):>5.0f}  {p.get('tilt_dir', '-')}\n")
+            fh.write(f"\n共 {len(records)} 对，其中双眼可用 {stereo_n} 对\n")
+            if missing:
+                fh.write("缺的类别: " + ", ".join(missing) + "\n")
+        print(f"\n  证据与报告已保存到: {out_dir}")
+        print("  下一步: python tools\\run_calibration.py  (步骤 2：计算标定参数)")
+    else:
+        print("\n  ⚠️ 没有采集到任何一帧（未写出报告）")
+    return 0
+
+
+# -----------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="标定图采集与标定板可行性预检（阶段 5）")
     ap.add_argument("--config", default=os.path.join(PROJECT_ROOT, "config.yaml"))
     ap.add_argument("--probe", action="store_true", help="交互式可行性预检（需要相机+管理员）")
+    ap.add_argument("--capture", action="store_true", help="正式采集标定图（需要相机+管理员）")
     ap.add_argument("--selftest", action="store_true", help="用合成图自检分析逻辑（不需要相机）")
     ap.add_argument("--distances", default="10,12,15,18,20,25,30",
                     help="预检的距离序列（cm，逗号分隔）")
@@ -477,9 +770,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.selftest:
         return selftest_mode(spec)
-    if not args.probe:
+    if not args.probe and not args.capture:
         ap.print_help()
-        print("\n提示：先用 --selftest 验证工具本身，再用 --probe 做实测预检")
+        print("\n提示：先用 --selftest 验证工具本身（不需要相机），"
+              "再用 --probe 做可行性预检，最后用 --capture 正式采集")
         return 1
 
     # 读配置（--res 可覆盖相机分辨率）
@@ -502,7 +796,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[错误] --res 应形如 2560x960，当前是 {args.res!r}")
             return 1
 
-    return probe_mode(cfg, args, spec)
+    return capture_mode(cfg, args, spec) if args.capture else probe_mode(cfg, args, spec)
 
 
 if __name__ == "__main__":

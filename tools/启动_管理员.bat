@@ -87,10 +87,11 @@ echo   [8] Disparity + AUTO-SAVE          (runs until q; saves one frame at #20)
 echo   [9] DirectShow capture test        (pygrabber, no OpenCV)
 echo  [10] OpenCV camera check            (standalone; normal-vs-admin compare)
 echo  [11] Calibration board probe        (stage 5 step 0: usable at which distance?)
+echo  [12] Capture calibration images     (stage 5 step 1: checklist + quality gate)
 echo   [0] Exit
 echo ============================================================
 set "DO="
-set /p "CH=Type 1..11 or 0 then press Enter: "
+set /p "CH=Type 1..12 or 0 then press Enter: "
 if "%CH%"=="1" set "DO=PREVIEW"
 if "%CH%"=="2" set "DO=DEPTH"
 if "%CH%"=="3" set "DO=DEPTHFAST"
@@ -102,6 +103,7 @@ if "%CH%"=="8" set "DO=DEPTHSAVE"
 if "%CH%"=="9" set "DO=DSTEST"
 if "%CH%"=="10" set "DO=CVTEST"
 if "%CH%"=="11" set "DO=CALPROBE"
+if "%CH%"=="12" set "DO=CALCAP"
 if "%CH%"=="0" set "DO=EXIT"
 if not defined DO goto menu
 if /i "%DO%"=="EXIT" goto done
@@ -113,6 +115,7 @@ if /i "%DO%"=="CLOUDFAST"  call :do_cloud_fast
 if /i "%DO%"=="CLOUDSAVE"  call :do_cloud_save
 if /i "%DO%"=="CLOUDNEAR"  call :do_cloud_near
 if /i "%DO%"=="CALPROBE"   call :do_calprobe
+if /i "%DO%"=="CALCAP"     call :do_calcap
 if /i "%DO%"=="DEPTHSAVE"  call :do_depth_save
 if /i "%DO%"=="CVTEST"     call :do_cvtest
 if /i "%DO%"=="DSTEST"     call :do_dstest
@@ -138,6 +141,17 @@ echo     Press SPACE at each distance to record one frame; press q to finish.
 echo     Output: corners found / pixels per square / sharpness / contrast / verdict,
 echo     plus evidence images and a report under output\calib_probe\.
 "%PY%" tools\capture_calib.py --probe
+exit /b
+
+:do_calcap
+echo.
+echo --- capture calibration images   [stage 5 / step 1] ---
+echo     Board DFOPTIX Q12-50-3 (12x9 squares, 3.0 mm). Working distance 9 - 17 cm.
+echo     SPACE = record one pair (rejected with a reason if it fails the quality gate)
+echo     u = undo last     f = force record     q = finish and write the report
+echo     Keep the board in the MIDDLE-RIGHT of the frame so BOTH eyes can see it.
+echo     Checklist: centre, 4 corners, and 4 tilt directions are tracked live.
+"%PY%" tools\capture_calib.py --capture
 exit /b
 
 :do_cloud_save
