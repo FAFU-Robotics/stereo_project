@@ -171,21 +171,68 @@ def detect_one(det, img: np.ndarray) -> Dict[str, Any]:
             "n_markers": n_mk, "n_corners": n_ch}
 
 
-def pose_from_corners(board, det_res: Dict[str, Any], K: np.ndarray, D: np.ndarray
+def undistort_points_inv_brown(pts: np.ndarray, K: np.ndarray, coeffs: Sequence[float]) -> np.ndarray:
+    """把**像素坐标**按 RealSense 的 Inverse Brown Conrady 模型反畸变。
+
+    为什么需要单独处理：RealSense 彩色流的畸变模型是 RS2_DISTORTION_INVERSE_BROWN_CONRADY，
+    它的系数含义是"**畸变坐标 -> 无畸变坐标**"（与 OpenCV 的标准 Brown-Conrady 正好相反）。
+    直接把系数丢给 OpenCV 的 solvePnP 会**把校正做反**，位姿会有系统性偏差。
+
+    做法：不重采样图像（那需要数值求逆），而是**只把检测到的角点坐标**按公式换算到无畸变坐标，
+    然后用"畸变为 0"的针孔模型求解位姿 —— 数学上等价且没有插值损失。
+
+    公式照搬 librealsense rsutil.h 的 rs2_deproject_pixel_to_point（INVERSE_BROWN_CONRADY 分支）：
+        x = (u - cx)/fx ; y = (v - cy)/fy
+        r2 = x^2 + y^2
+        f  = 1 + k1*r2 + k2*r2^2 + k3*r2^3
+        xu = x*f + 2*p1*x*y + p2*(r2 + 2*x^2)
+        yu = y*f + 2*p2*x*y + p1*(r2 + 2*y^2)
+    """
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    k1, k2, p1, p2, k3 = (list(coeffs) + [0.0] * 5)[:5]
+    p = np.asarray(pts, np.float64).reshape(-1, 2)
+    x = (p[:, 0] - cx) / fx
+    y = (p[:, 1] - cy) / fy
+    r2 = x * x + y * y
+    f = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+    xu = x * f + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)
+    yu = y * f + 2.0 * p2 * x * y + p1 * (r2 + 2.0 * y * y)
+    return np.column_stack([xu * fx + cx, yu * fy + cy]).astype(np.float64)
+
+
+def pose_from_corners(board, det_res: Dict[str, Any], K: np.ndarray, D: np.ndarray,
+                      dist_model: str = "opencv"
                       ) -> Tuple[np.ndarray, np.ndarray, float, int]:
-    """返回 (rvec, tvec, 重投影RMS px, 参与角点数)。"""
+    """返回 (rvec, tvec, 重投影RMS px, 参与角点数)。
+
+    dist_model:
+        "opencv"   : D 直接交给 OpenCV（标准 Brown-Conrady）
+        "inv_brown": D 是 RealSense 的 Inverse Brown Conrady —— 先把角点反畸变，再用畸变=0 求解
+        "none"     : 图像已无畸变（例如我们自制相机用的是校正后内参 P1）
+    """
     objp, imgp = board.matchImagePoints(det_res["corners"], det_res["ids"])
     if objp is None or len(objp) < 6:
         raise ValueError("有效角点不足")
+    objp = np.asarray(objp, np.float64)
+    imgp = np.asarray(imgp, np.float64).reshape(-1, 2)
+
+    if dist_model == "inv_brown":
+        imgp_use = undistort_points_inv_brown(imgp, K, D)
+        D_use = None
+    elif dist_model == "none":
+        imgp_use = imgp
+        D_use = None
+    else:
+        imgp_use = imgp
+        D_use = D if len(D) else None
+
     flags = getattr(cv2, "SOLVEPNP_ITERATIVE", 0)
-    ok, rvec, tvec = cv2.solvePnP(np.asarray(objp, np.float64), np.asarray(imgp, np.float64),
-                                  K, D if len(D) else None, flags=flags)
+    ok, rvec, tvec = cv2.solvePnP(objp, imgp_use.reshape(-1, 1, 2), K, D_use, flags=flags)
     if not ok:
         raise ValueError("solvePnP 失败")
-    proj, _ = cv2.projectPoints(np.asarray(objp, np.float64), rvec, tvec, K,
-                                D if len(D) else None)
-    rms = float(np.sqrt(((proj.reshape(-1, 2) - np.asarray(imgp, np.float64).reshape(-1, 2)) ** 2)
-                        .sum(1)).mean())
+    proj, _ = cv2.projectPoints(objp, rvec, tvec, K, D_use)
+    rms = float(np.sqrt(((proj.reshape(-1, 2) - imgp_use) ** 2).sum(1)).mean())
     return rvec, tvec, rms, len(objp)
 
 
@@ -308,7 +355,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--which", choices=("rectified", "raw"), default="rectified",
                     help="从标定文件取哪套内参：rectified=校正后 P1（默认）| raw=原始 K1+D1")
     ap.add_argument("--intrinsics", default="", help='外部内参 "fx,fy,cx,cy"（如 RealSense）')
-    ap.add_argument("--dist", default="", help='畸变 "k1,k2,p1,p2,k3"，默认全 0')
+    ap.add_argument("--dist", default="", help='畸变系数 "k1,k2,p1,p2,k3"，默认全 0')
+    ap.add_argument("--dist-model", choices=("opencv", "inv_brown", "none"), default="opencv",
+                    help="畸变模型：opencv=标准Brown-Conrady(默认) | inv_brown=RealSense的"
+                         "Inverse Brown Conrady（先把角点反畸变再求解）| none=图像已无畸变")
     ap.add_argument("--cols", type=int, default=DEF_COLS)
     ap.add_argument("--rows", type=int, default=DEF_ROWS)
     ap.add_argument("--square-mm", type=float, default=DEF_SQUARE_MM, help="方格实测边长 mm")
@@ -317,6 +367,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--ply", default="", help="可选：要变换的点云 PLY")
     ap.add_argument("--out", default="", help="变换后的 PLY 输出路径（不覆盖原文件）")
     ap.add_argument("--ply-units", choices=("m", "mm"), default="m", help="输入点云单位（默认米）")
+    ap.add_argument("--ply-convention", choices=("camera", "realsense_viewer"), default="camera",
+                    help="输入点云的坐标约定：camera=相机系(x右,y下,z前，默认) | "
+                         "realsense_viewer=RealSense 官方软件导出的约定(x右,y上,-z前，"
+                         "实测 viewer 与 rs-convert 都是这个)")
     ap.add_argument("--check", default="", help="把检测结果画到这张图里存盘（人工确认）")
     ap.add_argument("--min-corners", type=int, default=6, help="少于这么多角点就报错（默认 6）")
     ap.add_argument("--no-ply", action="store_true", help="只算矩阵，不读点云")
@@ -361,7 +415,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"         已把检测情况画到: {args.check}（看一眼为什么没检到）")
             continue
         try:
-            rvec, tvec, rms, n_used = pose_from_corners(board, res, K, D)
+            rvec, tvec, rms, n_used = pose_from_corners(board, res, K, D, dist_model=args.dist_model)
         except Exception as exc:  # noqa: BLE001
             print(f"  [失败] {name}: {exc}")
             continue
@@ -430,6 +484,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             pts, rgb = read_ply(args.ply)
             if args.ply_units == "mm":
                 pts = pts / 1000.0            # 统一到米，矩阵才是对的
+            if args.ply_convention == "realsense_viewer":
+                # 实测：RealSense 官方软件（viewer 的保存 与 rs-convert -l）导出的 PLY
+                # 用的是**查看器约定**：x 右、y 上、-z 前。必须先转成相机约定（x 右、y 下、z 前），
+                # 也就是把 y 和 z 各取反（绕 x 轴转 180°），否则变换结果会整体错掉。
+                pts[:, 1] = -pts[:, 1]
+                pts[:, 2] = -pts[:, 2]
+                print("  [约定] 已按 RealSense 查看器约定 (x右,y上,-z前) 转换到相机约定 (x右,y下,z前)")
             ext = pts.max(axis=0) - pts.min(axis=0)
             if args.ply_units == "m" and float(np.max(ext)) > 20.0:
                 print(f"\n  ⚠️ 输入点云的尺寸跨度 {np.max(ext):.1f} 单位 —— 若是毫米请加 --ply-units mm，"
