@@ -607,7 +607,7 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     输入：cfg / args（可覆盖 ffs.scale、valid_iters、max_disp、depth 范围、点大小）
     输出：进程退出码
     """
-    from depth_utils import (CameraParams, colorize_depth, depth_stats,
+    from depth_utils import (CameraParams, colorize_depth, depth_stats, disp_correction_from_config,
                              disparity_to_depth, filter_speckles, load_rectifier, save_depth_npy)
     from pointcloud import PointCloudBuilder
     from stereo_depth import FFSError, FFSDepthEstimator
@@ -618,6 +618,9 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
         rectifier = load_rectifier(cfg)
     except Exception as exc:  # noqa: BLE001
         print(f"  [校正] 加载失败，将用原始图像推理：{exc}")
+
+    # 经验视差校正（FFS 输出视差系统性偏小约 2% -> 深度偏大 2%）
+    disp_scale, disp_offset = disp_correction_from_config(cfg)
 
     # Open3D 体积大、导入慢，只在点云模式里按需导入（预览/视差模式不必付这个开销）
     try:
@@ -800,7 +803,10 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 max_valid = (est.max_disp * ratio) if ratio > 0 else None
                 # 过滤前"模型认为有效"的像素数（与 disparity_to_depth 的默认下限一致）
                 n_valid_total = int((np.isfinite(out["disp"]) & (out["disp"] >= 0.5)).sum())
-                depth, valid = disparity_to_depth(out["disp"], params_model, max_valid_disp=max_valid)
+                # 经验视差校正：实测 FFS 输出的视差系统性偏小约 2%（深度偏大 2%），
+                # 校正系数由 config 的 depth.disp_scale / disp_offset 给出（缺省=不校正）。
+                depth, valid = disparity_to_depth(out["disp"], params_model, max_valid_disp=max_valid,
+                                                  disp_scale=disp_scale, disp_offset=disp_offset)
                 n_after_extrap = int(valid.sum())
                 valid = filter_speckles(valid, int(depth_cfg.get("min_speckle_size", 0) or 0))
                 n_after_speckle = int(valid.sum())

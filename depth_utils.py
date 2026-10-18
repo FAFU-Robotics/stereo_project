@@ -181,6 +181,28 @@ def load_rectifier(cfg: Dict[str, Any]):
 
 
 # -----------------------------------------------------------------------------
+# 经验视差校正（从配置读取）
+# -----------------------------------------------------------------------------
+def disp_correction_from_config(cfg: Dict[str, Any]) -> Tuple[float, float]:
+    """读取 depth.disp_scale / depth.disp_offset（缺省 1.0 / 0.0 = 不校正）。
+
+    为什么要它：实测 FFS 输出的视差系统性偏小约 2%，导致深度整体偏大 2%。
+    两个独立方法互相印证（视差 vs 理论视差 = +2.00%，与 RealSense 点云对比 = +1.97%）。
+    校正公式 disp_corrected = disp * scale + offset，由 disparity_to_depth 应用。
+    """
+    depth_cfg = cfg.get("depth", {}) or {}
+    try:
+        scale = float(depth_cfg.get("disp_scale", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        scale = 1.0
+    try:
+        offset = float(depth_cfg.get("disp_offset", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        offset = 0.0
+    return scale, offset
+
+
+# -----------------------------------------------------------------------------
 # 视差 -> 深度
 # -----------------------------------------------------------------------------
 def disparity_to_depth(
@@ -188,6 +210,8 @@ def disparity_to_depth(
     params: CameraParams,
     min_valid_disp: float = 0.5,
     max_valid_disp: Optional[float] = None,
+    disp_scale: float = 1.0,
+    disp_offset: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """把视差图换算成深度图（米）。
 
@@ -199,6 +223,14 @@ def disparity_to_depth(
                          用途：FFS 的搜索范围是 max_disp，**超出该范围的视差是网络外推出来的，
                          不可信**。实测本机一帧数据里这类像素占 2.6%（深度约 0.15 m）。
                          建议传 0.98 * max_disp，作为一道便宜的安全网。
+        disp_scale /   : **经验视差校正**（立体视觉里的标准做法）。
+        disp_offset      对 FFS 实测发现：网络输出的视差系统性偏小约 2%，
+                         导致本项目所有深度整体偏大 ~2%（两台独立方法互相印证：
+                         视差-理论视差对比给出 +2.00%，与 RealSense 点云对比给出 +1.97%）。
+                         校正公式： disp_corrected = disp * disp_scale + disp_offset
+                         默认 (1.0, 0.0) = 不校正，保持原有行为。
+                         注意：**判别有效性的 min/max 门槛用的是原始视差**
+                         （那是模型的输出范围），校正只作用在最终算深度那一步。
     输出：
         (depth (H,W) float32 单位米, valid (H,W) bool)
         无效处 depth 置 0，valid=False。
@@ -218,8 +250,15 @@ def disparity_to_depth(
     if params.fx <= 0 or params.baseline_m <= 0:
         return depth, np.zeros(d.shape, dtype=bool)
 
+    # 经验视差校正（默认恒等，配置了才生效）
+    scale = float(disp_scale) if disp_scale else 1.0
+    offset = float(disp_offset) if disp_offset else 0.0
+    d_use = d * scale + offset if (scale != 1.0 or offset != 0.0) else d
+    if scale != 1.0 or offset != 0.0:
+        valid &= np.isfinite(d_use) & (d_use >= min_valid_disp)
+
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        z = params.fx * params.baseline_m / np.maximum(d, min_valid_disp)
+        z = params.fx * params.baseline_m / np.maximum(d_use, min_valid_disp)
     z = z.astype(np.float32)
     valid &= np.isfinite(z) & (z > 0)
     depth[valid] = z[valid]
