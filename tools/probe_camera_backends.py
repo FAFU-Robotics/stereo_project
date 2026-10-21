@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 os.environ.setdefault("OPENCV_LOG_LEVEL", "OFF")
 
 import cv2  # noqa: E402
+import numpy as np  # noqa: E402
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -129,66 +130,91 @@ def fourcc_str(v: float) -> str:
 
 
 # ---------------------------------------------------------------- 单个组合
-def probe_one(api: int, idx: int, warmup: int, frames: int) -> Optional[Dict[str, Any]]:
-    """打开一次，依次尝试候选分辨率；返回最好那条记录（拿不到就 None）。"""
-    cap = cv2.VideoCapture(idx, api)
-    if not cap.isOpened():
-        cap.release()
-        return None
+def safe_grab(cap: cv2.VideoCapture, n: int = 1) -> None:
+    """grab 可能抛 cv2.error（MSMF 在设备状态异常时会这样），不能让它中断探测。"""
+    for _ in range(max(n, 0)):
+        try:
+            cap.grab()
+        except cv2.error:
+            return
 
+
+def safe_read(cap: cv2.VideoCapture, tries: int = 3) -> Tuple[bool, Optional[Any]]:
+    """read 可能抛 cv2.error（实测 MSMF 切到不支持的尺寸后会抛 Assertion failed），
+    所以必须包起来；返回 (成功?, 帧)。"""
+    for _ in range(max(tries, 1)):
+        try:
+            ok, frame = cap.read()
+        except cv2.error:
+            ok, frame = False, None
+        if ok and frame is not None and getattr(frame, "size", 0):
+            return True, frame
+        time.sleep(0.03)
+    return False, None
+
+
+def probe_one(api: int, idx: int, warmup: int, frames: int) -> Optional[Dict[str, Any]]:
+    """对每个候选分辨率**重新打开一次设备**再试。
+
+    为什么要重开：实测 MSMF 在 cap.set() 到它不支持的尺寸后，设备会进入异常状态，
+    后续 read() 直接抛 Assertion failed（整个程序崩掉）。重开比"原地切换"稳得多。
+    """
     mjpg = cv2.VideoWriter_fourcc(*"MJPG")
     results: List[Dict[str, Any]] = []
     for (want_w, want_h) in CANDIDATE_SIZES:
-        # MJPG 必须先设：USB2 带宽下不压缩只能跑几帧
-        cap.set(cv2.CAP_PROP_FOURCC, mjpg)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, want_w)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, want_h)
-        ok = False
-        frame = None
-        for _ in range(max(warmup, 1)):          # 丢掉前几帧（自动曝光/首帧未就绪）
-            cap.grab()
-        for _ in range(3):
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                break
-            time.sleep(0.05)
+        cap = cv2.VideoCapture(idx, api)
+        if not cap.isOpened():
+            cap.release()
+            break                      # 这个 (后端, 设备号) 根本打不开，后面的尺寸也不用试
+        try:
+            # MJPG 必须先设：USB2 带宽下不压缩跑不到高帧率
+            cap.set(cv2.CAP_PROP_FOURCC, mjpg)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, want_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, want_h)
+            safe_grab(cap, warmup)      # 丢掉前几帧（自动曝光/首帧未就绪）
+            ok, frame = safe_read(cap, 3)
+        except cv2.error:
+            ok, frame = False, None
         if not ok or frame is None:
-            results.append({"want": (want_w, want_h), "got": None, "ok": False})
+            results.append({"want": (want_w, want_h), "ok": False})
+            cap.release()
+            time.sleep(0.25)
             continue
         got_h, got_w = frame.shape[:2]
-        # 帧率：连续读 frames 帧
         fps = 0.0
         if frames > 0:
             t0 = time.perf_counter()
             n_ok = 0
             for _ in range(frames):
-                r, _f = cap.read()
+                r, _f = safe_read(cap, 1)
                 n_ok += 1 if r else 0
-            dt = max(time.perf_counter() - t0, 1e-9)
-            fps = n_ok / dt
-        # 左右两半亮度差（确认并排布局）
+            fps = n_ok / max(time.perf_counter() - t0, 1e-9)
+        # 左右两半亮度差（确认并排布局，不是单张图被劈开）
         half_diff = float("nan")
         if got_w >= 2 and got_h > 0:
             mid = got_w // 2
-            gl = cv2.cvtColor(frame[:, :mid], cv2.COLOR_BGR2GRAY).mean()
-            gr = cv2.cvtColor(frame[:, mid:], cv2.COLOR_BGR2GRAY).mean()
+            gl = float(cv2.cvtColor(np.ascontiguousarray(frame[:, :mid]), cv2.COLOR_BGR2GRAY).mean())
+            gr = float(cv2.cvtColor(np.ascontiguousarray(frame[:, mid:]), cv2.COLOR_BGR2GRAY).mean())
             half_diff = abs(gl - gr)
+        try:
+            fourcc = fourcc_str(cap.get(cv2.CAP_PROP_FOURCC))
+            be = backend_name(cap)
+        except cv2.error:
+            fourcc, be = "?", "?"
         rec = {
             "want": (want_w, want_h), "ok": True, "got": (got_w, got_h),
             "requested_ok": (got_w, got_h) == (want_w, want_h),
-            "fourcc": fourcc_str(cap.get(cv2.CAP_PROP_FOURCC)),
-            "fps": fps, "half_diff": half_diff, "backend": backend_name(cap),
-            "frame": frame,
+            "fourcc": fourcc, "fps": fps, "half_diff": half_diff,
+            "backend": be, "frame": frame,
         }
         results.append(rec)
+        cap.release()
+        time.sleep(0.25)
         if rec["requested_ok"]:
-            break                                 # 要的分辨率拿到了就不试更小的
-    cap.release()
-    time.sleep(0.25)                              # 让设备释放，避免下一个组合"被占用"
+            break                      # 要的分辨率拿到了，不必再试更小的
     ok_recs = [r for r in results if r.get("ok")]
     if not ok_recs:
         return None
-    # 优先返回"请求分辨率命中"的那条，其次第一条成功的
     exact = [r for r in ok_recs if r.get("requested_ok")]
     best = exact[0] if exact else ok_recs[0]
     best["all"] = results
