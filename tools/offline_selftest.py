@@ -163,14 +163,20 @@ class FakeEstimator:
 
 
 # -----------------------------------------------------------------------------
-def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud") -> int:
+def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud",
+             threaded: bool = False) -> int:
     """跑一个场景，返回 0=通过 / 非 0=失败。
 
     mode: preview（阶段1）/ depth（阶段3）/ pointcloud（阶段4）
     三种模式的代码路径不同（尤其是各自循环里用到的局部变量），所以都要覆盖，
     否则"某个模式里忘了初始化变量"这类 bug 依然会漏掉。
+
+    threaded: 阶段 7.2 的三线程流水线开关。
+        注意 main() 里才把 --threaded 解析成 args.threaded_mode，
+        而本自检是**直接调用** runner(cfg, args) 的，所以这里要手动补这个属性。
     """
-    label = ("模糊画面（踩中质量警告分支）" if blur else "清晰画面")
+    label = ("模糊画面（踩中质量警告分支）" if blur else "清晰画面") + \
+            ("·三线程" if threaded else "")
     print("=" * 88)
     print(f"  场景: --mode {mode} / {label}")
     print("=" * 88)
@@ -199,6 +205,8 @@ def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud") -
         if mode == "pointcloud":
             cli.append("--no-cloud-window")   # 不开 Open3D 窗口
         args = main_mod.build_parser().parse_args(cli)
+        # 阶段 7.2：直接调 runner 会绕过 main() 的 --threaded 解析，这里手动补上
+        args.threaded_mode = bool(threaded)
         cfg = main_mod.load_config(cfg_path)
         # ⚠️ 必须把输出目录改到独立位置！
         # 自检会用 --save-snapshot 跑真实的保存代码，如果沿用 config 里的 output/，
@@ -251,6 +259,13 @@ def main() -> int:
         for blur in (False, True):
             total += 1
             bad += run_case(a.config, blur=blur, frames=a.frames, mode=mode)
+
+    # 阶段 7.2：三线程流水线单独跑一组（目前只接入了 depth 模式）
+    # 说明：线程模式下"每帧都推理"变成"尽力推理"，所以不能用帧数判断，
+    # 只要能看到推理结果并正常退出即可。
+    for blur in (False, True):
+        total += 1
+        bad += run_case(a.config, blur=blur, frames=a.frames, mode="depth", threaded=True)
 
     # 顺带核对"自动保存"这条路径真的写出了东西（否则测试只覆盖了计算、没覆盖保存）
     produced = sorted(_out_dirs() - before)

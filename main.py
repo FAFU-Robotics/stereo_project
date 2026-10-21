@@ -378,6 +378,7 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     auto_saved = False
     last_left = last_right = None
     last_disp = None
+    out: Optional[Dict[str, Any]] = None      # 最近一次推理结果（三线程模式下可能"这一轮没有新结果"）
     t_loop_start = time.perf_counter()
     n_processed = 0
     rec_infer_ms: List[float] = []
@@ -394,8 +395,60 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
         print("  用真实相机画面预热模型（第一次会比较慢）…")
         est.warmup(est.warmup_iters, left=last_left, right=last_right)
 
+        # ---------------------------------------------------------------- 阶段 7.2
+        # 可选的三线程流水线：采集 / 推理 解耦，画面按"最新帧"刷新。
+        # 开关优先级：命令行 --threaded on/off  >  config.yaml 的 runtime.threaded
+        threaded = bool(getattr(args, "threaded_mode", False))
+        pipe = None
+        if threaded:
+            from pipeline_threaded import ThreadedPipeline
+            pipe = ThreadedPipeline(cam, est, rectifier=rectifier).start()
+            print("  [流水线] 三线程已启用：采集与推理解耦，画面按最新帧刷新（视差略有滞后属正常）")
+            t_wait = time.perf_counter()
+            while not pipe.has_new_result():
+                if pipe.error is not None:
+                    print(f"[流水线错误] {type(pipe.error).__name__}: {pipe.error}")
+                    return 2
+                if time.perf_counter() - t_wait > 60.0:
+                    print("[流水线错误] 等待首帧推理结果超时（60s）")
+                    pipe.stop()
+                    return 2
+                time.sleep(0.02)
+            rframe, out0 = pipe.take_result()
+            if rframe is not None and out0 is not None:
+                out = out0                      # 后面状态栏/统计要用 out['scale'] 等
+                last_left, last_right = rframe.left, rframe.right
+                last_disp = out0["disp"]
+                n_processed += 1
+                rec_infer_ms.append(out0["timings_ms"]["infer"])
+
         while True:
-            if not paused:
+            if pipe is not None:
+                # ---- 线程模式：不阻塞地取最新帧 + 最新结果 ----
+                live_pair, _seq = pipe.latest_frame()
+                if live_pair is not None and not paused:
+                    last_left, last_right = live_pair.left, live_pair.right
+                if pipe.error is not None:
+                    print(f"[流水线错误] {type(pipe.error).__name__}: {pipe.error}")
+                    break
+                if pipe.has_new_result():
+                    rframe, out = pipe.take_result()
+                    if rframe is not None and out is not None:
+                        last_disp = out["disp"]
+                        n_processed += 1
+                        rec_infer_ms.append(out["timings_ms"]["infer"])
+                        if len(rec_infer_ms) > 30:
+                            rec_infer_ms.pop(0)
+                        if n_processed % 10 == 1:
+                            sharpness = frame_sharpness(rframe.left)
+                            if sharpness < 30 and not sharp_warned:
+                                sharp_warned = True
+                                print("  " + "!" * 76)
+                                print(f"  [图像质量警告] 画面清晰度过低：拉普拉斯方差 = {sharpness:.1f}（正常清晰画面应 > 100）")
+                                print("                 立体匹配依赖清晰纹理，过糊会导致视差失效。")
+                                print("  " + "!" * 76)
+                time.sleep(0.001)      # 让出 CPU；真正的节奏由窗口 waitKey 控制
+            elif not paused:
                 try:
                     pair = cam.read()          # 永远只取最新帧，不做队列堆积
                 except CameraReadError as exc:
@@ -568,6 +621,12 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\n  收到 Ctrl+C，正在释放资源…")
     finally:
+        # 线程模式必须先停流水线，再关相机/模型（否则后台线程可能还在用它们）
+        try:
+            if pipe is not None:
+                pipe.stop()
+        except Exception:  # noqa: BLE001
+            pass
         cam.close()
         est.close()
         viewer.close()
@@ -1002,6 +1061,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--duration", type=float, default=0.0, help="运行 N 秒后自动退出（0=不限制）")
     p.add_argument("--save-snapshot", action="store_true", help="运行中保存一次左右原始图像")
     p.add_argument("--display-scale", type=float, default=None, help="显示缩放系数（覆盖配置）")
+    p.add_argument("--threaded", default="auto", choices=["auto", "on", "off"],
+                   help="阶段7.2 三线程流水线：auto=按 config 的 runtime.threaded，on/off=强制开关")
     # 阶段 3：FFS 参数临时覆盖（不改配置文件）
     p.add_argument("--scale", type=float, default=None, help="覆盖 ffs.scale（0.5 可明显提速）")
     p.add_argument("--valid-iters", type=int, default=None, help="覆盖 ffs.valid_iters")
@@ -1026,6 +1087,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.list:
         return run_list(cfg)
+
+    # 阶段 7.2：解析三线程开关（命令行优先，其次 config.yaml 的 runtime.threaded）
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    if args.threaded == "on":
+        args.threaded_mode = True
+    elif args.threaded == "off":
+        args.threaded_mode = False
+    else:
+        args.threaded_mode = bool(runtime_cfg.get("threaded", False))
 
     if args.mode == "preview":
         return run_preview(cfg, args)

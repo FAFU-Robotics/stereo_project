@@ -258,6 +258,14 @@ runtime:
   window_name: "stereo_project"
   display_scale: 1.0       # 显示窗口缩放；1.0 = 原始大小
   status_every_n_frames: 30
+  # ---- 阶段 7.2：三线程流水线（采集 / 推理 解耦）----
+  # true  = 采集与推理放后台线程，画面按"最新帧"刷新（20~30 FPS），视差按推理速度更新
+  #         实测分阶段（tools/bench_pipeline.py）：推理 164 ms、点云 23 ms、显示 12 ms
+  #         串行 5.01 FPS -> 三线程估计 6.04 FPS，且画面手感明显更顺
+  #         ⚠️ 视差会比画面滞后一点点，这是解耦的正常现象（不是 bug）
+  # false = 原单线程串行路径（行为与之前完全一致）
+  # 命令行 --threaded on/off 可临时覆盖本开关（目前只接入了 --mode depth）
+  threaded: false
   # 保存目录（相对项目根目录，均为程序生成的数据，不入库）
   save_dir: output
   save_raw: true           # 保存左右原始图像
