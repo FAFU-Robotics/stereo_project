@@ -5,13 +5,16 @@
     并把"为什么不行"的信息一次打印清楚。
 
 为什么要有它（本机背景）：
-    本机实测发现：**普通权限**的进程访问物理相机会被 Windows 拒绝
-    （HRESULT=0x80070005 / E_ACCESSDENIED），而**管理员权限**完全正常。
-    为了排除"是不是项目代码/配置的问题"，这里刻意不用项目的任何模块，
-    只用 cv2 + numpy + 系统自带模块，把变量降到最少。
+    2026-09-30 曾出现"物理相机只对管理员可用"的现象；2026-10-21 复核发现
+    **普通用户（Medium 完整性）已经可以正常打开**，真正会被拒绝的是
+    **低完整性 / 沙箱 / 受限会话**里的进程（E_ACCESSDENIED）。
+    本工具刻意不用项目的任何模块，只用 cv2 + numpy + 系统自带模块，
+    用来快速判断"当前这个终端/进程"能不能打开相机，以及是哪个索引/后端。
+    注意：索引 2 = HP 虚拟摄像头，isOpened()/read() 都返回 True，但画面全黑，
+    不能拿它当"双目相机正常"的证据；验收请用索引 1。
 
 它会做这些事：
-    1) 打印**自己是否以管理员身份运行**（IsUserAnAdmin）—— 这是解读结果的关键；
+    1) 打印**自己是否以管理员身份运行**（仅供参考：普通用户不需要管理员）；
     2) 打印 Python / OpenCV 版本、解释器路径；
     3) 从注册表读取在线的 UVC 相机名字（只读，用来和索引交叉印证）；
     4) 对每个索引 × 每种后端(dshow/msmf) 尝试打开，成功则：
@@ -31,15 +34,16 @@
 关于 --quick 模式（与用户原来的 Camara_test.py 的关系）：
     Camara_test.py 做的是"0~9 全部索引、只用 DSHOW、每路读 1 帧、一行一个结果"，
     本工具的 --quick **完全覆盖**这套行为，并额外提供三件它没有的东西：
-      ① 打印【是否以管理员身份运行】—— 这是判断"打不开"原因的关键变量；
+      ① 打印【是否以管理员身份运行】（仅参考，普通用户不需要管理员）；
       ② 把结果翻译成人话（打不开 / 能打开但读不到帧 / 全黑 / 拿到真实画面）；
       ③ 结尾给出总结与下一步建议。
     该脚本已并入本工具，不再作为独立文件存在（如需独立版本，本文件就是）。
 
 如何做对照实验（关键）：
-    ① 普通权限：直接双击 tools\\相机OpenCV自检.bat
-    ② 管理员权限：双击 tools\\启动_管理员.bat → 菜单 [10]
-    两次输出里的 "管理员权限" 一行不同，其余信息可直接对比。
+    ① 普通权限：直接双击 tools\\相机OpenCV自检.bat（推荐，也是验收方式）
+    ② 管理员权限：仅当普通权限被拒、怀疑是受限会话时，才用 tools\\启动_管理员.bat → 菜单 [10]
+    如果普通权限和本工具都拿不到图，先确认当前终端是不是沙箱/低完整性，
+    而不是直接改用管理员运行。
 
 退出码：0=至少一路拿到真实画面；3=能打开但全是黑屏/无信号；5=没有任何一路能打开。
 =============================================================================
@@ -69,8 +73,8 @@ BACKENDS: List[Tuple[str, int]] = [("dshow", cv2.CAP_DSHOW), ("msmf", cv2.CAP_MS
 def is_admin() -> bool:
     """返回当前进程是否以管理员（高完整性）身份运行。
 
-    用 ctypes 调 Windows 自带的 IsUserAnAdmin，不需要额外依赖。
-    这个信息是本自检**最重要的一行**：同一个索引，普通权限被拒、管理员权限能用。
+    仅作为诊断信息：本机普通用户（Medium）已经能打开相机，不需要管理员。
+    真正影响物理相机访问的是"低完整性 / 沙箱 / 受限会话"，不是 UAC 提权。
     """
     try:
         import ctypes
@@ -221,18 +225,6 @@ def grab_frames(cap: cv2.VideoCapture, n: int) -> Dict[str, object]:
 # -----------------------------------------------------------------------------
 # 主流程
 # -----------------------------------------------------------------------------
-def _group_by_index(results: List[Dict[str, object]]) -> Dict[int, List[bool]]:
-    """把结果按索引分组，值为"该后端是否成功打开"的列表。
-
-    用途：判断某个索引是"所有后端都打不开"，还是"至少有一种后端能打开"。
-    注意不能简单地看"有没有失败记录"，否则一个索引里 dshow 成功、msmf 失败时会被误判。
-    """
-    out: Dict[int, List[bool]] = {}
-    for r in results:
-        out.setdefault(int(r["index"]), []).append(bool(r.get("opened")))
-    return out
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description="OpenCV 相机可用性自检（独立、最小化）")
     p.add_argument("--index", type=int, default=-1, help="只测这一个索引（默认 -1 = 扫描一段）")
@@ -263,11 +255,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[参数错误] --res 应形如 1280x480，当前是 {args.res!r}")
         return 1
 
+    # 中文 Windows 控制台默认 GBK；✅/❌ 等字符可能触发 UnicodeEncodeError。
+    # 保留当前编码，只把无法编码的字符替换掉，确保诊断脚本不会因打印而崩溃。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
     admin = is_admin()
     print("=" * 88)
     print("  OpenCV 相机可用性自检（独立最小化版本）" + ("  [--quick 快速全扫 0~9]" if args.quick else ""))
     print("=" * 88)
-    print(f"  管理员权限      : {'是（高完整性）' if admin else '否（普通权限）'}   <-- 关键变量")
+    print(f"  管理员令牌      : {'是（高完整性）' if admin else '否（普通用户）'}   <-- 仅参考，普通用户无需")
     print(f"  Python          : {sys.version.split()[0]}   {sys.executable}")
     print(f"  OpenCV          : {cv2.__version__}")
     print(f"  NumPy           : {np.__version__}")
@@ -384,35 +384,22 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if ok_any:
         print("  【结论】OpenCV 能正常取到真实画面，相机链路可用。")
-        print("         若这是普通权限下跑出来的，说明权限问题已消失；")
-        print("         若这是管理员权限下跑出来的，普通权限可能仍被拒（对比另一次输出即可确认）。")
+        print("         普通用户权限即可，不需要管理员；可在普通 PowerShell 里复跑确认。")
+        print("         验收请以索引 1（DECXIN）的真实画面为准；索引 2 全黑不算通过。")
         return 0
 
     if opened_any:
         print("  【结论】能打开设备，但拿不到有效画面（黑屏/无信号）。")
-        print("         可能原因：格式/分辨率不匹配、镜头盖未开、光照不足、或虚拟摄像头。")
-        failed_idx = sorted(
-            i for i, oks in _group_by_index(results).items() if not any(oks)
-        )
-        if failed_idx and not admin:
-            print()
-            print(f"  ⚠️ 另外注意：本次是【普通权限】运行，而索引 {failed_idx} 连打开都失败了。")
-            print("     本机已知现象：普通权限访问【物理】相机会被 Windows 拒绝，")
-            print("     错误签名 HRESULT=0x80070005 (E_ACCESSDENIED)，发生在『绑定设备』那一步。")
-            print("     ▶ 请以管理员权限复测做对照：双击 tools\\启动_管理员.bat → 菜单输入 [10]")
+        print("         本机索引 2 = HP 虚拟摄像头：isOpened()/read() 都返回 True，但画面全黑；")
+        print("         请改用索引 1（DECXIN）复测。其他原因：格式/分辨率不匹配、镜头盖、光照不足。")
         return 3
 
     print("  【结论】所有组合都打不开相机。")
-    if not admin:
-        print("         而本次是【普通权限】运行 —— 这与本机已知现象一致：")
-        print("         普通权限访问物理相机会被 Windows 拒绝，错误签名是")
-        print("         HRESULT=0x80070005 (E_ACCESSDENIED)，发生在『绑定设备』那一步。")
-        print("         ▶ 请以管理员权限复测一次做对照：")
-        print("           双击 tools\\启动_管理员.bat → 菜单输入 [10]")
-        print("         若管理员权限下能出画面、普通权限下不能，就确认是权限问题（而非代码/相机）。")
-    else:
-        print("         而本次是【管理员权限】运行 —— 说明问题**不只是权限**，")
-        print("         请把完整输出发我，需要检查：设备是否仍在位、驱动状态、是否被别的程序独占。")
+    print("         先确认当前进程不是低完整性 / 沙箱 / 受限会话 ——")
+    print("         本机只有这种会话会被 Windows 以 E_ACCESSDENIED 拒绝。")
+    print("         请在普通桌面 PowerShell 里复跑本工具；仍失败再检查：")
+    print("         设备是否在位、是否被别的程序占用、索引是否因拔插变化。")
+    print("         不建议直接把“管理员运行”当作解决方案。")
     return 5
 
 

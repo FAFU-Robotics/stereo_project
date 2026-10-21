@@ -2,18 +2,19 @@
 
 =============================================================================
 【要回答的问题】
-    本机用 DirectShow 打开双目相机需要**管理员权限**（实测 HRESULT 0x80070005）。
-    这会让"打包成 EXE 双击运行"完全失败。所以必须先验证：
-        · OpenCV 的 MSMF 后端能不能**免提权**打开？
+    2026-10-21 复核：普通用户（Medium 完整性）用 DirectShow 即可打开双目相机，
+    不需要管理员权限；只有 Low 完整性/沙箱/受限会话会被 Windows 拒绝。
+    本工具仍用来验证：
+        · 哪个后端能打开（本机 DSHOW 可用，MSMF 按索引不可用）
         · 能不能拿到项目需要的 **1280x480**（两个 640x480 并排）？
         · 帧率够不够（推理只要 6~20 FPS，30 FPS 就够）？
         · 采集出来的左右两半是不是真的不同（确认并排布局没错位）？
 
 【怎么用】
-    1) **必须在普通（非管理员）窗口里运行**，否则结论无意义：
-         whoami /groups | findstr /i "Mandatory"
-         -> Medium Mandatory Level  表示普通权限，可以测
-         -> High   Mandatory Level  表示管理员，换窗口
+    1) 在普通桌面 PowerShell 里运行即可。先用完整性确认不是受限会话：
+         whoami /groups | findstr S-1-16
+         -> Medium (S-1-16-8192)  普通用户，可以测
+         -> Low    (S-1-16-4096)  沙箱/受限会话，物理相机会被拒绝，换普通终端
     2) 关掉所有可能占相机的程序（RealSense Viewer / 其他 python / 会议软件）
     3) python tools\\probe_camera_backends.py
        只看环境不碰相机:  python tools\\probe_camera_backends.py --dry-run
@@ -293,7 +294,7 @@ def main() -> int:
     print("=" * 96)
     if not successes:
         print("  ❌ 三个后端都打不开相机。可能原因：① 相机被别的程序占用；")
-        print("     ② 需要管理员权限（再试一次管理员窗口对比）；③ USB/驱动异常（重插）")
+        print("     ② 相机被占用 / 索引因拔插变化（用 main.py --list 复核）；③ USB/驱动异常（重插）")
         return 1
     exact = [s for s in successes if s.get("requested_ok")]
     if exact:

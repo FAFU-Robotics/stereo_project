@@ -39,6 +39,29 @@ BACKENDS: Dict[str, int] = {
     "any": cv2.CAP_ANY,
 }
 
+# 默认回退顺序：DSHOW 是本机唯一可靠的后端（MSMF 在本机按索引打不开物理相机）
+DEFAULT_BACKEND_ORDER: Tuple[str, ...] = ("dshow", "msmf", "any")
+
+
+def _normalize_backend_order(value: Any, primary: str) -> List[str]:
+    """把 "dshow,msmf,any" / ["dshow", ...] 规范成候选后端顺序。
+
+    规则：配置的 primary 永远排第一；随后是 backend_fallbacks；最后补齐默认项。
+    只保留 BACKENDS 里认识的键，并去重；这样即使 config 写错也不会静默变成 CAP_ANY。
+    """
+    if isinstance(value, str):
+        items = [v.strip().lower() for v in value.split(",")]
+    elif isinstance(value, (list, tuple)):
+        items = [str(v).strip().lower() for v in value]
+    else:
+        items = []
+    ordered = [str(primary).strip().lower()] + items + list(DEFAULT_BACKEND_ORDER)
+    out: List[str] = []
+    for name in ordered:
+        if name and name in BACKENDS and name not in out:
+            out.append(name)
+    return out or ["dshow"]
+
 
 class CameraError(RuntimeError):
     """相机打开/配置失败（设备不存在、被占用、后端不可用等）。"""
@@ -51,6 +74,21 @@ class CameraReadError(RuntimeError):
 # -----------------------------------------------------------------------------
 # 设备枚举（Windows 注册表读取真实设备名）
 # -----------------------------------------------------------------------------
+def _format_vid_pid(instance_key: str) -> str:
+    """把注册表键 "VID_0BDA&PID_5883&MI_00" 格式化成 "0BDA:5883"。
+
+    直接 replace("&", "") 会得到 "0BDA:5883MI_00" 这种带接口后缀的字符串；
+    这里只取 VID_/PID_ 两段，解析失败时原样返回，绝不抛异常。
+    """
+    vid = pid = ""
+    for part in str(instance_key).split("&"):
+        if part.startswith("VID_"):
+            vid = part[4:]
+        elif part.startswith("PID_"):
+            pid = part[4:]
+    return f"{vid}:{pid}" if vid and pid else str(instance_key)
+
+
 def list_video_devices_from_registry() -> List[Dict[str, str]]:
     """从 Windows 注册表读取当前**在线**的 UVC 视频设备真实名字。
 
@@ -102,7 +140,7 @@ def list_video_devices_from_registry() -> List[Dict[str, str]]:
                                 {
                                     "instance_id": f"USB\\{vid_pid}\\{inst}",
                                     "friendly_name": name,
-                                    "vid_pid": vid_pid.replace("VID_", "").replace("PID_", ":").replace("&", ""),
+                                    "vid_pid": _format_vid_pid(vid_pid),
                                     # present=False 表示"历史上插过但现在没插"（注册表残留）
                                     "present": "是" if f"USB\\{vid_pid}\\{inst}" in connected else "否",
                                 }
@@ -307,6 +345,21 @@ class StereoCamera:
             raise ValueError(f"camera.mode 只能是 side_by_side 或 dual，当前为 {self.mode!r}")
 
         self.backend: str = str(self.cfg.get("backend", "dshow")).lower()
+        if self.backend not in BACKENDS:
+            raise ValueError(f"camera.backend 只能是 {sorted(BACKENDS)}，当前为 {self.backend!r}")
+        # 打开策略：主后端优先，失败后按 backend_fallbacks 依次回退。
+        # 普通用户（Medium 完整性）用 DSHOW 即可，不需要管理员权限。
+        self.backend_order: List[str] = _normalize_backend_order(
+            self.cfg.get("backend_fallbacks", "dshow,msmf,any"), primary=self.backend)
+        self.open_with_params: bool = bool(self.cfg.get("open_with_params", True))
+        self.open_retry: int = max(1, int(self.cfg.get("open_retry", 2)))
+        self.open_retry_delay: float = max(0.0, float(self.cfg.get("open_retry_delay_s", 0.35)))
+        self.verify_size: bool = bool(self.cfg.get("verify_size", True))
+        self.min_aspect_ratio: float = float(self.cfg.get("min_aspect_ratio", 2.0))
+        self.auto_detect: bool = bool(self.cfg.get("auto_detect", False))
+        self.scan_max_index: int = max(0, int(self.cfg.get("scan_max_index", 5)))
+        self.open_report: List[str] = []
+        self._resolved_single_index: Optional[int] = None
         self.fourcc: str = str(self.cfg.get("fourcc", "MJPG") or "")
         self.req_w: int = int(self.cfg.get("width", 1280))
         self.req_h: int = int(self.cfg.get("height", 480))
@@ -342,80 +395,308 @@ class StereoCamera:
 
     # ---------------------------------------------------------------- 打开/关闭
     def open(self) -> None:
-        """打开相机并做预热。失败抛 CameraError（带可读原因）。"""
+        """打开相机并做预热。失败抛 CameraError（带真实尝试记录，不猜原因）。"""
         if self._opened:
             return
-        if self.mode == "side_by_side":
-            idx = int(self.cfg.get("single_index", 0))
-            self._caps = [self._open_one(idx, name="single")]
-        else:
-            li = int(self.cfg.get("left_index", 0))
-            ri = int(self.cfg.get("right_index", 1))
-            if li == ri:
-                raise CameraError(f"dual 模式下左右索引相同（{li}），请在 config.yaml 中区分")
-            self._caps = [self._open_one(li, name="left"), self._open_one(ri, name="right")]
+        self.close()  # 清掉上一次失败/未关闭留下的句柄
+        self.open_report = []
+        try:
+            if self.mode == "side_by_side":
+                idx = self._resolve_single_index()
+                self._caps = [self._open_one(idx, name="single")]
+            else:
+                li = int(self.cfg.get("left_index", 0))
+                ri = int(self.cfg.get("right_index", 1))
+                if li == ri:
+                    raise CameraError(f"dual 模式下左右索引相同（{li}），请在 config.yaml 中区分")
+                self._caps = [self._open_one(li, name="left")]
+                self._caps.append(self._open_one(ri, name="right"))
 
-        # 预热：丢弃前若干帧，等自动曝光/白平衡收敛
+            self._warmup()
+            self._measure_and_validate()
+            self._opened = True
+            self._t_start = time.perf_counter()
+            for line in self.open_report:
+                print(f"[相机] {line}")
+        except Exception:
+            # 关键：任何一步失败都释放已经打开的设备（dual 模式只开成一路时尤其重要）
+            self.close()
+            raise
+
+    def _resolve_single_index(self) -> int:
+        """返回 side_by_side 使用的 OpenCV 索引；支持 single_index: auto。"""
+        raw = self.cfg.get("single_index", 0)
+        if self.auto_detect or (isinstance(raw, str) and raw.strip().lower() in ("auto", "detect")):
+            self._resolved_single_index = self._auto_detect_single_index()
+            return self._resolved_single_index
+        self._resolved_single_index = int(raw)
+        return self._resolved_single_index
+
+    def _auto_detect_single_index(self) -> int:
+        """扫描索引，选第一个能给出"宽 >= 2*高"且尺寸符合请求的设备。
+
+        为什么用这个判据（本机实测）：
+            0 = 笔记本内置 640x480（4:3）
+            1 = DECXIN 双目 1280x480 / 2560x960（8:3，左右拼接）
+            2 = HP 虚拟摄像头 640x480（4:3，画面全黑）
+        因此"能按请求给出 8:3 画面"足以把双目设备与另外两者分开，且不依赖设备顺序。
+        """
+        if self.mode != "side_by_side":
+            raise CameraError("auto 检测目前只支持 side_by_side 模式")
+        print(f"[相机] auto 检测：扫描索引 0..{self.scan_max_index}，"
+              f"寻找 {self.req_w}x{self.req_h} 的左右拼接设备 ...")
+        errors: List[str] = []
+        for idx in range(self.scan_max_index + 1):
+            cap, msg = self._try_open(idx, self.backend, use_params=True)
+            if cap is None:
+                errors.append(f"索引 {idx}: {msg}")
+                continue
+            try:
+                try:
+                    ok, frame = cap.read()
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"索引 {idx}: read() 异常 {type(exc).__name__}: {exc}")
+                    continue
+                if not ok or frame is None or frame.size == 0:
+                    errors.append(f"索引 {idx}: 能打开但读不到帧")
+                    continue
+                h, w = frame.shape[:2]
+                if self.min_aspect_ratio > 0 and w < self.min_aspect_ratio * h:
+                    errors.append(f"索引 {idx}: {w}x{h}（不是左右拼接比例）")
+                    continue
+                if self.req_w > 0 and self.req_h > 0 and (w, h) != (self.req_w, self.req_h):
+                    errors.append(f"索引 {idx}: {w}x{h}（不是请求的 {self.req_w}x{self.req_h}）")
+                    continue
+                errors.append(f"索引 {idx}: {w}x{h} -> 选中")
+                print("[相机] " + "\n[相机] ".join(errors))
+                return idx
+            finally:
+                cap.release()
+        raise CameraError(
+            "auto 检测失败：没有找到符合尺寸的左右拼接相机。\n  尝试记录：\n    "
+            + "\n    ".join(errors)
+            + "\n  可把 config.yaml 的 single_index 改回具体索引（本机 1 = DECXIN）后重试。"
+        )
+
+    def _warmup(self) -> None:
+        """丢弃前若干帧，等自动曝光/白平衡收敛。"""
         for _ in range(max(0, self.warmup_frames)):
             for cap in self._caps:
-                cap.read()
+                try:
+                    cap.read()
+                except Exception:
+                    pass
 
-        # 记录实际分辨率
+    def _measure_and_validate(self) -> None:
+        """读取一帧确认真实尺寸，并拒绝"驱动静默降级"和明显的错误设备。"""
         if self.mode == "side_by_side":
             ok, frame = self._caps[0].read()
-            if not ok or frame is None:
-                self.close()
+            if not ok or frame is None or frame.size == 0:
                 raise CameraError("预热后仍无法读取拼接画面")
             h, w = frame.shape[:2]
             self._full_size = (w, h)
+            self._check_requested_size(w, h)
+            self._check_stereo_layout(w, h)
             ew = self.eye_width if self.eye_width > 0 else w // 2
+            if ew <= 0 or ew * 2 > w + 1:
+                raise CameraError(f"拼接画面宽度 {w} 无法按 eye_width={ew} 切分")
             self._size = (ew, h)
-        else:
-            sizes = []
-            for cap in self._caps:
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    self.close()
-                    raise CameraError("预热后仍无法读取某一侧画面")
-                sizes.append((frame.shape[1], frame.shape[0]))
-            self._size = sizes[0]
-            self._full_size = sizes[0]
-            if sizes[0] != sizes[1]:
-                # 不静默容忍：分辨率不一致会导致后续视差/点云错位
-                raise CameraError(f"左右分辨率不一致：{sizes[0]} vs {sizes[1]}，请检查相机配置")
+            left, right = self._split_frame(frame)
+            self._warn_if_same(left, right, "左右半幅")
+            m, s = self._image_quality(left)
+            self.open_report.append(f"实际输出 {w}x{h}，单眼 {ew}x{h}，左眼 mean={m:.1f} std={s:.1f}")
+            return
 
-        self._opened = True
-        self._t_start = time.perf_counter()
+        # dual 模式
+        sizes: List[Tuple[int, int]] = []
+        frames: List[np.ndarray] = []
+        for cap in self._caps:
+            ok, frame = cap.read()
+            if not ok or frame is None or frame.size == 0:
+                raise CameraError("预热后仍无法读取某一侧画面")
+            sizes.append((frame.shape[1], frame.shape[0]))
+            frames.append(frame)
+        self._size = sizes[0]
+        self._full_size = sizes[0]
+        if sizes[0] != sizes[1]:
+            # 不静默容忍：分辨率不一致会导致后续视差/点云错位
+            raise CameraError(f"左右分辨率不一致：{sizes[0]} vs {sizes[1]}，请检查相机配置")
+        self._check_requested_size(sizes[0][0], sizes[0][1])
+        self._warn_if_same(frames[0], frames[1], "左右相机")
+        self.open_report.append(
+            f"dual 左={sizes[0][0]}x{sizes[0][1]} 右={sizes[1][0]}x{sizes[1][1]}")
 
-    def _open_one(self, index: int, name: str) -> cv2.VideoCapture:
-        """打开单个索引并设置格式；失败抛 CameraError。"""
-        cap = cv2.VideoCapture(index, BACKENDS.get(self.backend, cv2.CAP_ANY))
+    def _check_stereo_layout(self, w: int, h: int) -> None:
+        """side_by_side 模式下拒绝明显不是"左右拼接"的画面。
+
+        本机 DECXIN 的双目格式全是 8:3（1280x480、2560x960 ...），
+        如果把请求尺寸误改成 640x480，某些后端会返回 4:3 单幅图；
+        继续对半切会得到两幅 320x480 的窄图，视差/点云全部错位。
+        """
+        if self.min_aspect_ratio <= 0 or h <= 0:
+            return
+        if w < self.min_aspect_ratio * h:
+            raise CameraError(
+                f"实际输出 {w}x{h} 不像是左右拼接的双目画面"
+                f"（宽/高={w / h:.2f}，要求 >= {self.min_aspect_ratio}）。\n"
+                "        本机 DECXIN 的双目格式都是 8:3（如 1280x480、2560x960）。\n"
+                "        如果确实使用其它布局的拼接相机，把 camera.min_aspect_ratio 调小或设为 0。"
+            )
+
+    def _check_requested_size(self, w: int, h: int) -> None:
+        """请求了分辨率却拿到别的尺寸时明确报错，避免静默用错尺寸跑标定。"""
+        if not self.verify_size or self.req_w <= 0 or self.req_h <= 0:
+            return
+        if (w, h) != (self.req_w, self.req_h):
+            raise CameraError(
+                f"相机实际输出 {w}x{h}，与 config.yaml 请求的 {self.req_w}x{self.req_h} 不一致。\n"
+                "        这会让后续视差/点云与标定内参错位，所以这里直接失败而不是继续。\n"
+                "        排查：1) python tools\\probe_cameras.py 看该相机支持哪些分辨率；\n"
+                "              2) 把 width/height 改成实际支持的值；\n"
+                "              3) 确认索引没指向虚拟摄像头/笔记本内置相机；\n"
+                "              4) 如确实允许降级，把 camera.verify_size 设为 false。"
+            )
+
+    @staticmethod
+    def _image_quality(img: np.ndarray) -> Tuple[float, float]:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+        return float(gray.mean()), float(gray.std())
+
+    def _warn_if_same(self, left: np.ndarray, right: np.ndarray, what: str) -> None:
+        """左右完全相同时给出明确警告（单目相机/驱动复制是真实故障）。"""
+        if left.shape == right.shape and np.array_equal(left, right):
+            msg = f"{what}完全相同：可能打开了单目设备，或驱动把同一路画面复制成了两路。"
+            self.open_report.append(msg)
+            print(f"[警告] {msg}")
+
+    def _try_open(self, index: int, backend_name: str,
+                  use_params: bool) -> Tuple[Optional[cv2.VideoCapture], str]:
+        """尝试一种 (后端, 打开方式) 组合，不读帧；成功返回 (cap, 说明)。"""
+        api = BACKENDS.get(backend_name, cv2.CAP_ANY)
+        params: List[int] = []
+        if use_params:
+            if self.req_w > 0:
+                params += [cv2.CAP_PROP_FRAME_WIDTH, self.req_w]
+            if self.req_h > 0:
+                params += [cv2.CAP_PROP_FRAME_HEIGHT, self.req_h]
+            if self.fourcc:
+                params += [cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc)]
+            if self.req_fps > 0:
+                params += [cv2.CAP_PROP_FPS, self.req_fps]
+        mode = "打开时传参" if params else "打开后设置"
+        try:
+            cap = cv2.VideoCapture(index, api, params) if params else cv2.VideoCapture(index, api)
+        except Exception as exc:  # noqa: BLE001 —— 驱动层可能直接抛 cv2.error
+            return None, f"{backend_name} / {mode}: 构造异常 {type(exc).__name__}: {exc}"
         if not cap.isOpened():
             cap.release()
-            raise CameraError(
-                f"无法打开相机索引 {index}（{name}，后端={self.backend}）。\n"
-                "        【已确认原因】本机实测：**普通权限**的进程访问物理相机会被系统拒绝，\n"
-                "        错误码 HRESULT=0x80070005 (E_ACCESSDENIED)；而**管理员权限完全正常**\n"
-                "        （实测 1280x480 真实画面、51.6 FPS、0 黑屏、0 读取失败）。\n"
-                "        这不是相机故障，也不是 OpenCV 或本项目代码的问题。\n"
-                "        【解决办法】以管理员权限运行：\n"
-                "          双击  tools\\启动_管理员.bat  →  在 UAC 弹窗点【是】\n"
-                "        【完整证据链】docs\\阶段1_相机根因分析.md 第 12 节\n"
-                "        【已逐项排除】OpenCV 版本(4.12 与 5.0 行为一致)、设备与驱动(帧服务器多次 hr=0x0 成功)、\n"
-                "        USB 与像素格式、相机隐私设置(Allow)、组策略、沙箱与完全权限、进程完整性级别、\n"
-                "        锁屏、线程模型(STA/MTA)、qedit.dll、厂商过滤驱动、HP 用户态进程。"
-            )
-        if self.fourcc:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.req_w)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.req_h)
-        if self.req_fps > 0:
-            cap.set(cv2.CAP_PROP_FPS, self.req_fps)
+            return None, f"{backend_name} / {mode}: isOpened=False"
+
+        if not params:
+            try:
+                if self.fourcc:
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
+                if self.req_w > 0:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.req_w)
+                if self.req_h > 0:
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.req_h)
+                if self.req_fps > 0:
+                    cap.set(cv2.CAP_PROP_FPS, self.req_fps)
+            except Exception as exc:  # noqa: BLE001
+                cap.release()
+                return None, f"{backend_name} / {mode}: 设置参数异常 {type(exc).__name__}: {exc}"
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
-        return cap
+        timeout_prop = getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+        if timeout_prop is not None:
+            try:
+                cap.set(timeout_prop, 2000)  # 设备异常时避免 read() 永久阻塞
+            except Exception:
+                pass
+        return cap, f"{backend_name} / {mode}: 已打开"
+
+    def _open_one(self, index: int, name: str) -> cv2.VideoCapture:
+        """按"主后端优先 + 回退 + 重试"打开单个索引；失败抛带实际记录的 CameraError。"""
+        if self.open_with_params:
+            plans: List[Tuple[str, bool]] = [(self.backend, True), (self.backend, False)]
+        else:
+            plans = [(self.backend, False), (self.backend, True)]
+        for backend_name in self.backend_order:
+            if backend_name != self.backend:
+                plans.append((backend_name, True))
+
+        attempts: List[str] = []
+        for round_i in range(1, self.open_retry + 1):
+            for backend_name, use_params in plans:
+                cap, msg = self._try_open(index, backend_name, use_params)
+                if cap is None:
+                    attempts.append(f"第{round_i}轮 {msg}")
+                    continue
+                try:
+                    ok, frame = cap.read()
+                except Exception as exc:  # noqa: BLE001 —— 某些后端会抛 cv2.error
+                    cap.release()
+                    attempts.append(f"第{round_i}轮 {msg}，read() 异常 {type(exc).__name__}: {exc}")
+                    continue
+                if not ok or frame is None or frame.size == 0:
+                    cap.release()
+                    attempts.append(f"第{round_i}轮 {msg}，但读不到首帧")
+                    continue
+                h, w = frame.shape[:2]
+                if self.verify_size and self.req_w > 0 and self.req_h > 0 \
+                        and (w, h) != (self.req_w, self.req_h):
+                    cap.release()
+                    attempts.append(
+                        f"第{round_i}轮 {msg}，实际 {w}x{h} != 请求 {self.req_w}x{self.req_h}")
+                    continue
+                self.open_report.append(f"索引 {index}（{name}）: {msg}，首帧 {w}x{h}")
+                return cap
+            if round_i < self.open_retry:
+                time.sleep(self.open_retry_delay)
+        raise CameraError(self._format_open_error(index, name, attempts))
+
+    def _format_open_error(self, index: int, name: str, attempts: List[str]) -> str:
+        """把失败尝试 + 当前设备清单整理成可读、可复现的错误（不猜 HRESULT）。"""
+        lines: List[str] = [
+            f"无法打开相机索引 {index}（{name}）。",
+            f"请求：{self.req_w}x{self.req_h} {self.fourcc or '(不设置格式)'} "
+            f"@{self.req_fps}fps，模式={self.mode}，主后端={self.backend}",
+            "实际尝试：",
+        ]
+        lines += [f"  - {a}" for a in attempts[-12:]]
+        try:
+            devs = list_video_devices_from_registry()
+        except Exception:
+            devs = []
+        # 只列"当前在线"的设备，并按 (名字, VID:PID) 去重：
+        # 注册表里同一台 UVC 相机会有多个 MI_xx 接口和历史残留，全部列出来只会干扰判断。
+        present: List[Dict[str, str]] = []
+        seen = set()
+        for d in devs:
+            if d.get("present") != "是":
+                continue
+            key = (d.get("friendly_name", ""), d.get("vid_pid", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            present.append(d)
+        if present:
+            lines.append("当前在线的 UVC 视频设备（注册表，顺序 != OpenCV 索引）：")
+            for d in present:
+                lines.append(f"  - {d.get('friendly_name', '?')} ({d.get('vid_pid', '?')})")
+        lines += [
+            "常见原因（按可能性）：",
+            "  1) 设备被其他程序占用：相机 App / 会议软件 / 另一个 Python 进程；",
+            "  2) 索引因拔插或设备顺序变化指向了别的相机：运行 python tools\\probe_cameras.py 复核；",
+            "  3) 进程处于低完整性/沙箱/受限会话：Windows 会拒绝物理相机（E_ACCESSDENIED）；"
+            "请改用普通 PowerShell 或桌面终端；",
+            "  4) 驱动不接受该分辨率/格式：改 config.yaml 的 width/height/fourcc，"
+            "或把 camera.open_with_params 设为 false。",
+            "注意：普通用户（Medium 完整性）即可打开相机，不需要管理员权限。",
+        ]
+        return "\n        ".join(lines)
 
     def close(self) -> None:
         """释放所有相机句柄。可重复调用（幂等）。"""
@@ -478,7 +759,11 @@ class StereoCamera:
         """读取一帧，失败时重试；仍失败抛 CameraReadError。"""
         last_err = ""
         for attempt in range(max(1, self.read_retry)):
-            ok, frame = cap.read()
+            try:
+                ok, frame = cap.read()
+            except Exception as exc:  # noqa: BLE001 —— 部分后端（如 MSMF）会直接抛 cv2.error
+                last_err = f"第 {attempt + 1} 次读取异常 {type(exc).__name__}: {exc}"
+                continue
             if ok and frame is not None and frame.size > 0:
                 return frame
             last_err = f"第 {attempt + 1} 次读取失败"
@@ -523,9 +808,10 @@ class StereoCamera:
             self.stats["no_signal_frames"] += 1
             if not self._blank_warned:
                 self._blank_warned = True
-                m, s = stats[0]
+                (ml, sl), (mr, sr) = stats
                 print(
-                    f"[警告] 画面无有效图像数据（左眼 mean={m:.2f} std={s:.2f}）。常见原因：\n"
+                    f"[警告] 画面无有效图像数据（左眼 mean={ml:.2f} std={sl:.2f}，"
+                    f"右眼 mean={mr:.2f} std={sr:.2f}）。常见原因：\n"
                     "       1) 相机未真正出流（USB 端口/线材/供电，或用了 USB2 跑不动）；\n"
                     "       2) 分辨率/FOURCC 未被驱动接受（见 tools/probe_cameras.py 结果）；\n"
                     "       3) 镜头被遮挡 / 镜头盖未取下 / 环境全黑；\n"
@@ -558,9 +844,11 @@ class StereoCamera:
     def describe(self) -> str:
         """返回一行可显示在画面上的设备/模式摘要。"""
         if self.mode == "side_by_side":
-            idx = self.cfg.get("single_index")
-            return f"mode=side_by_side idx={idx} full={self._full_size[0]}x{self._full_size[1]}"
+            idx = (self._resolved_single_index
+                   if self._resolved_single_index is not None else self.cfg.get("single_index"))
+            return (f"mode=side_by_side idx={idx} backend={self.backend} "
+                    f"full={self._full_size[0]}x{self._full_size[1]}")
         return (
             f"mode=dual L={self.cfg.get('left_index')} R={self.cfg.get('right_index')} "
-            f"eye={self._size[0]}x{self._size[1]}"
+            f"backend={self.backend} eye={self._size[0]}x{self._size[1]}"
         )

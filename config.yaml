@@ -26,27 +26,29 @@ camera:
   #   side_by_side —— 一个 USB 设备输出"左右拼接"画面（左右眼在同一幅图里）
   #   dual         —— 两个独立 UVC 设备，各占一个 OpenCV 索引
   #
-  # 【阶段 1 实测结论（已取证，见 docs/阶段1_相机根因分析.md）】
-  #   索引映射（由 DirectShow 枚举 + pygrabber 两条独立路径确认）：
-  #       0 = HP True Vision FHD Camera   （笔记本内置物理相机，YUY2，最高 1920x1080）
-  #       1 = USB Camera                  （VID_0BDA&PID_5883 = DECXIN 双目相机）
-  #       2 = OMEN Cam ＆ Voice            （HP 的**软件虚拟摄像头**，不要用！）
+  # 【2026-10-21 复核（见 docs/阶段1_相机权限复核_2026-10-21.md）】
+  #   索引映射（DirectShow 枚举复核，未变）：
+  #       0 = HP True Vision FHD Camera   （笔记本内置物理相机，4:3）
+  #       1 = USB Camera (0BDA:5883)      （DECXIN 双目相机，8:3 左右拼接）
+  #       2 = OMEN Cam ＆ Voice            （HP 的**软件虚拟摄像头**，640x480 全黑，永远不要用）
   #
   #   DECXIN（索引 1）的真实能力清单（驱动直接声明，MJPG 与 YUY2 各一套）：
   #       2560x960 / 2048x768 / 2560x720 / 1920x540 / 1600x600 / 1280x480 / 640x240
   #       —— 全部是 8:3 超宽比例，即"左右拼接"布局：1280x480 = 2 x 640x480（每只眼 640x480）
   #       —— 它**不提供** 640x480 这类单幅分辨率，之前请求 640x480 是错的
   #
-  #   ✅ 已验证可用（2026-09-30 实测）：以**管理员权限**运行时，
-  #       索引 1 稳定输出 1280x480 真实画面，实测 51.6 FPS（含显示开销）、0 黑屏、0 读取失败。
-  #   ⚠️ 普通（非管理员）权限的进程访问物理相机会被系统拒绝（HRESULT 0x80070005）。
-  #       因此本项目当前**必须**用 tools\启动_管理员.bat 启动（会自动申请管理员权限）。
-  #       这是"绕过"而不是"根治"，根因仍未完全解释；详见 docs\阶段1_相机根因分析.md 第 12 节。
+  #   ✅ 普通用户权限（Medium 完整性）即可打开索引 1：
+  #       实测 1280x480、左右各 640x480、10 帧 0 读取失败、close() 正常释放。
+  #   ⚠️ 只有"低完整性 / 沙箱 / 受限会话"里的进程才可能被 Windows 拒绝
+  #       （E_ACCESSDENIED）。这不是"普通用户 vs 管理员"的区别；
+  #       不需要管理员权限，也不需要 tools\启动_管理员.bat。
+  #   ⚠️ 索引 2 在普通权限下 isOpened()=True、read()=True，但画面全黑。
+  #       它只能证明"虚拟摄像头能开"，不能证明双目相机可用 —— 不要用它做验收测试。
   mode: side_by_side
 
   # ---- side_by_side 模式参数 ----
   single_index: 1          # 实测 = DECXIN 双目相机（不是 2；2 是 HP 虚拟摄像头）
-  split: left_right        # left_right = 左半幅是左眼；right_left = 反之（待图像确认）
+  split: left_right        # left_right = 左半幅是左眼；right_left = 反之（2026-10-21 图像复核通过）
   eye_width: 0             # 每只眼的有效宽度；0 = 自动对半切（1280/2 = 640）
 
   # ---- dual 模式参数（本机不适用：只有一个物理双目设备）----
@@ -55,6 +57,14 @@ camera:
 
   # ---- 通用采集参数 ----
   backend: dshow           # dshow / msmf / any（实测 msmf 在本机无法按索引打开，用 dshow）
+  backend_fallbacks: [dshow, msmf, any]  # 主后端失败时依次回退（dshow 是唯一可靠后端）
+  open_with_params: true   # 打开时直接传分辨率/格式（对 UVC 比"打开后 set"更可靠）
+  open_retry: 2            # 打开失败重试轮数
+  open_retry_delay_s: 0.35 # 每轮重试间隔（秒）
+  verify_size: true        # 实际尺寸 != 请求尺寸时直接报错，防止静默降级后跑错标定
+  min_aspect_ratio: 2.0    # 左右拼接画面的最小宽高比；本机 1280x480=2.67；0=不检查
+  auto_detect: false       # true = 扫描索引自动找 8:3 双目设备（single_index 也可写 auto）
+  scan_max_index: 5        # auto_detect 的扫描范围 0..N
   fourcc: MJPG             # 实测该相机常用 MJPG（2560x960@60 等）；YUY2 也支持
   width: 1280              # 实测支持：1280x480 = 左右各 640x480（FFS 的最佳输入尺寸）
   height: 480
@@ -65,8 +75,8 @@ camera:
   black_mean_threshold: 1.0
   black_std_threshold: 1.0
   # "无有效信号"判定（更宽）：驱动返回空缓冲/噪声时，灰度和标准差都会很小。
-  # 实测本机唯一能打开的相机就是这种状态（640x480, mean≈2, std≈4, 约 1 fps），
-  # 用这两个阈值就能自动识别出来并报警，而不是把黑屏当成"环境暗"。
+  # 本机 HP 虚拟摄像头（索引 2）就是 640x480、mean≈0、std≈1 的全黑画面；
+  # 用这两个阈值能把它识别出来并报警，而不是把黑屏当成"环境暗"。
   no_signal_mean_threshold: 5.0
   no_signal_std_threshold: 12.0
 

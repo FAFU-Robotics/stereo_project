@@ -1,14 +1,12 @@
 @echo off
 REM ============================================================================
-REM  stereo_project launcher  --  runs the project WITH administrator rights
+REM  stereo_project launcher  --  LEGACY / DIAGNOSTIC: runs WITH administrator rights
 REM ----------------------------------------------------------------------------
-REM  WHY ELEVATED:
-REM    On this machine the physical cameras can only be opened by a process
-REM    running with administrator rights. A normal (non-elevated) process gets
-REM    HRESULT 0x80070005 (E_ACCESSDENIED) from the Windows camera frame server.
-REM    Verified: an elevated window received 39 real frames in 5 seconds from
-REM    the DECXIN stereo camera (2560x960, side-by-side left/right).
-REM    This is a WORKAROUND, not a fix of the underlying permission problem.
+REM  2026-10-21 UPDATE: normal use does NOT need administrator rights.
+REM    A normal Medium-integrity process opens the DECXIN camera (index 1,
+REM    DSHOW, 1280x480) correctly. Use  启动_普通权限.bat  for normal runs.
+REM    This file is kept only to diagnose a low-integrity / sandboxed session,
+REM    where Windows may return E_ACCESSDENIED for physical cameras.
 REM ----------------------------------------------------------------------------
 REM  What it does:
 REM    [1] OpenCV index scan          (checks which camera indexes OpenCV can open)
@@ -23,6 +21,14 @@ REM  OEM code page, so non-ASCII text here would break parsing.
 REM ============================================================================
 setlocal EnableExtensions
 chcp 65001 >nul 2>&1
+
+echo ============================================================
+echo   NOTICE: normal use does NOT need administrator rights.
+echo   Please use  tools\启动_普通权限.bat  for normal runs.
+echo   This launcher is only for a restricted / sandboxed session.
+echo ============================================================
+choice /C YN /N /M "Continue with administrator rights? [Y/N] "
+if errorlevel 2 exit /b 0
 
 REM ---- elevation check: High integrity SID = S-1-16-12288 ----
 whoami /groups | findstr /C:"S-1-16-12288" >nul 2>&1

@@ -390,7 +390,7 @@ def selftest_mode(spec: BoardSpec) -> int:
 
 
 # -----------------------------------------------------------------------------
-# 模式二：交互式预检（需要相机 + 管理员权限）
+# 模式二：交互式预检（需要相机；普通权限即可）
 # -----------------------------------------------------------------------------
 def probe_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -> int:
     distances = [float(x) for x in str(args.distances).split(",") if x.strip()]
@@ -624,7 +624,7 @@ def _checklist_lines(records: Sequence[Dict[str, Any]], checklist: Dict[str, int
 
 
 # -----------------------------------------------------------------------------
-# 模式三：正式采集（需要相机 + 管理员权限）
+# 模式三：正式采集（需要相机；普通权限即可）
 # -----------------------------------------------------------------------------
 def capture_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec) -> int:
     cal = dict(cfg.get("calibration", {}) or {})
@@ -822,8 +822,8 @@ def capture_mode(cfg: Dict[str, Any], args: argparse.Namespace, spec: BoardSpec)
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="标定图采集与标定板可行性预检（阶段 5）")
     ap.add_argument("--config", default=os.path.join(PROJECT_ROOT, "config.yaml"))
-    ap.add_argument("--probe", action="store_true", help="交互式可行性预检（需要相机+管理员）")
-    ap.add_argument("--capture", action="store_true", help="正式采集标定图（需要相机+管理员）")
+    ap.add_argument("--probe", action="store_true", help="交互式可行性预检（需要相机，普通权限即可）")
+    ap.add_argument("--capture", action="store_true", help="正式采集标定图（需要相机，普通权限即可）")
     ap.add_argument("--selftest", action="store_true", help="用合成图自检分析逻辑（不需要相机）")
     ap.add_argument("--distances", default="10,12,15,18,20,25,30",
                     help="预检的距离序列（cm，逗号分隔）")
