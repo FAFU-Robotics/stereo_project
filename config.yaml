@@ -216,12 +216,12 @@ ffs:
   #                       hidden_dims=[128], vit_size=vitl, low_memory=0
   model_file: model_best_bp2_serialize.pth
   # 每次推理的迭代次数：越小越快、精度略降（官方表：8 -> 49.4ms / 4 -> 41.1ms @3090）
-  valid_iters: 8
+  valid_iters: 4
   # 最大视差（代价体编码上限）：官方 readme 明确说 192 对大多数场景足够。
   # 注意 cfg.yaml 里写的是 416，我们用 192 覆盖它（与官方 run_demo 默认一致）。
   max_disp: 192
   # 输入缩放比例：模型建议图像宽度 < 1000，故宽度大时应设 0.5
-  scale: 1.0
+  scale: 0.5
 
   # =========================================================================
   # 阶段 7.3 实测的「速度 ↔ 精度」三档（数据来源 tools/bench_presets.py + bench_pipeline.py）
