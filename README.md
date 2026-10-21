@@ -18,6 +18,14 @@ D:\31931\Documents\stereo_project\tools\启动_普通权限.bat
 >
 > ⚠️ 只有在"低完整性 / 沙箱 / 受限会话"里运行时，Windows 才会拒绝物理相机
 > （`E_ACCESSDENIED`）。`tools\启动_管理员.bat` 仅保留作受限环境的诊断入口。
+>
+> **2026-10-22 最终修复**：根因是 `D:\31931\Documents\python312\python.exe` 的
+> **文件完整性标签为 Low**（继承自 DSH 工作区）。执行：
+> ```powershell
+> icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
+> ```
+> 后普通 PowerShell 即可正常打开相机；详见
+> [docs/阶段1_相机权限复核_2026-10-21.md](docs/阶段1_相机权限复核_2026-10-21.md) 第 0 节。
 
 ## 1. 环境（本机实测，见 [docs/阶段1_相机实测记录.md](docs/阶段1_相机实测记录.md)）
 
@@ -247,7 +255,20 @@ python tools\run_ffs_demo.py --valid-iters 4 --max-disp 192
 | 深度范围过滤 / 无效值处理 | ✅ 实测 76373 个过近点被 `zmin` 正确剔除 |
 | **实机实时点云窗口** | ⚠️ **待用户以普通权限运行确认**（本机采集侧已实测通过） |
 
-## 5. 相机权限问题的最终结论（2026-10-21 复核：**不需要管理员权限**）
+## 5. 相机权限问题的最终结论（2026-10-22：`python.exe` 的 Low 文件标签）
+
+**最终修复（2026-10-22）**：`icacls` 显示 `D:\31931\Documents\python312\python.exe`
+的标签是 `Mandatory Label\Low Mandatory Level:(I)(NW)`（从 DSH 工作区继承）。
+Low 进程访问物理相机时，在 DirectShow `BindToObject` 阶段被 `E_ACCESSDENIED` 拒绝。
+执行：
+
+```powershell
+icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
+```
+
+后，普通 PowerShell 里 Python 令牌变为 `S-1-16-8192`（Medium），索引 1 可正常输出
+1280×480；**不需要管理员**。完整步骤与注意事项见
+[docs/阶段1_相机权限复核_2026-10-21.md](docs/阶段1_相机权限复核_2026-10-21.md) 第 0 节。
 
 **旧结论（2026-09-30，已过时）**：普通权限进程打开物理相机 → `HRESULT 0x80070005 (E_ACCESSDENIED)`，
 当时用管理员权限绕过。
@@ -257,25 +278,37 @@ python tools\run_ffs_demo.py --valid-iters 4 --max-disp 192
 | 进程令牌 / 场景 | DirectShow `BindToObject` | 项目 `main.py` 实际采集 |
 |---|---|---|
 | **普通用户 Medium 完整性**（真实普通 PowerShell） | 索引 0/1 均 ✅ 成功 | ✅ 索引 1 打开 1280×480，30 帧 0 失败、0 黑屏、正常释放 |
-| Low 完整性 / 沙箱 / 受限会话 | 索引 0/1 ❌ `E_ACCESSDENIED` | ❌ 打不开物理相机 |
+| `python.exe` 文件标签为 Low / 沙箱 / 受限会话 | 索引 0/1 ❌ `E_ACCESSDENIED` | ❌ 打不开物理相机 |
 | 索引 2（HP 虚拟摄像头） | ✅ 能绑定 | ⚠️ `isOpened()=True`、`read()=True`，但画面全黑（640×480，mean≈0） |
 
 **结论**：
 
-1. **普通用户权限完全够用**，不需要管理员；旧文档把"低完整性/沙箱"误写成了"普通权限"。
+1. **普通用户权限完全够用**，不需要管理员；根因是 `python.exe` 的文件完整性标签
+   被 DSH 工作区继承成了 **Low**，用 `icacls ... /setintegritylevel Medium` 修复。
 2. 索引 2 的成功只能证明**虚拟摄像头**能打开，不能证明双目相机可用；
    它的 `read()=True` 返回的是黑帧，不能作为验收依据。
 3. 索引 1 仍是 DECXIN 双目相机；DSHOW 仍是正确后端（MSMF 在本机按索引打不开，普通/管理员都一样）。
 4. `camera.py` 已加入：打开时传参、DSHOW→MSMF→ANY 回退、尺寸校验、重复设备检测、
    失败记录与安全释放；不再把任何失败都硬编码成"需要管理员"。
+5. **如果再次打不开**：先查 `icacls "D:\31931\Documents\python312\python.exe" | findstr /I "Mandatory"`；
+   若又是 `Low`，重新执行 `icacls ... /setintegritylevel Medium`。
+   重装/升级 Python 或 DSH 重新给工作区打标签后，标签可能恢复成 Low。
 
 > 历史取证（2026-09-30）仍保留在 [docs/阶段1_相机根因分析.md](docs/阶段1_相机根因分析.md)，
 > 其中第 12 节的"必须管理员"已被本次复核取代。
 
 ## 6. 已知限制
 
-1. **不需要提权**：普通权限即可访问相机（见第 5 节）。只有在低完整性/沙箱会话里
-   才会被 Windows 拒绝；此时改用普通 PowerShell 或桌面终端，而不是长期以管理员运行。
+1. **不需要提权**：普通权限即可访问相机（见第 5 节）。如果打不开，先查
+   `D:\31931\Documents\python312\python.exe` 的完整性标签：
+   ```powershell
+   icacls "D:\31931\Documents\python312\python.exe" | findstr /I "Mandatory"
+   ```
+   若是 `Low`：
+   ```powershell
+   icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
+   ```
+   然后重开 PowerShell。不要长期以管理员运行。
 2. **未标定**：没有内参、没有畸变参数、没有校正映射；基线 60 mm 只是厂家标称值。
    未校正图像产生的深度/点云只能验证流程，**不能测距、不能测尺寸、不能定位**。
    （好消息：实测左右眼垂直位移 `dy = 0.26 px ≈ 0`，说明该模块**近似已校正**。）

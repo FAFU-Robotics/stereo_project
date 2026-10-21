@@ -44,6 +44,11 @@ camera:
   #       不需要管理员权限，也不需要 tools\启动_管理员.bat。
   #   ⚠️ 索引 2 在普通权限下 isOpened()=True、read()=True，但画面全黑。
   #       它只能证明"虚拟摄像头能开"，不能证明双目相机可用 —— 不要用它做验收测试。
+  #   ⚠️ 若普通 PowerShell 里仍打不开，先查 Python 本身的文件完整性标签：
+  #       icacls "D:\31931\Documents\python312\python.exe" | findstr /I "Mandatory"
+  #       应为 Medium；若为 Low（DSH 工作区会继承 Low）：
+  #       icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
+  #       2026-10-22 实测：这是本机"必须管理员"的真正原因。
   mode: side_by_side
 
   # ---- side_by_side 模式参数 ----
