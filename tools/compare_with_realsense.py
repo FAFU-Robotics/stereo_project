@@ -108,6 +108,8 @@ def main() -> int:
     ap.add_argument("--db3", default="", help="RealSense 录制文件（默认取 Documents 下最新 .db3）")
     ap.add_argument("--out", default=os.path.join(PROJECT_ROOT, "output", "realign", "v3"))
     ap.add_argument("--no-export", action="store_true", help="只算指标，不写 PLY")
+    ap.add_argument("--crop", action="store_true",
+                    help="额外汇出仅板面区域的 PLY（在 CloudCompare 里量精度要用这两份）")
     args = ap.parse_args()
 
     diy_dir = args.diy or newest(os.path.join(PROJECT_ROOT, "output", "captures", "*_cloud"), "cloud.ply")
@@ -237,11 +239,35 @@ def main() -> int:
         print(f"\n  已导出（板坐标系，单位米，带颜色）:")
         print(f"    {os.path.relpath(p1, PROJECT_ROOT)}   {len(diy)} 点")
         print(f"    {os.path.relpath(p2, PROJECT_ROOT)}   {len(rs_board)} 点")
+
+        # 再导一份"只保留板面矩形"的版本。
+        # 为什么需要：在 CloudCompare 里对**整片**点云算 C2C 时，
+        # 非重叠区域（桌面/剪贴板/背景）根本找不到对应点，会被裁到 max-distance
+        # 那一根柱子上，看起来像"差 50mm"，其实是"没有对应点"。
+        # 裁到板面矩形后，直方图就直接等于精度本身。
+        if args.crop:
+            keep_d = board_subset(diy)
+            keep_r = board_subset(rs_board)
+            pc3 = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(keep_d))
+            if diy_col is not None:
+                pc3.colors = o3d.utility.Vector3dVector(board_subset(diy_col))
+            pc4 = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(keep_r))
+            pc4.colors = o3d.utility.Vector3dVector(board_subset(rs_col))
+            p3 = os.path.join(args.out, "diy_board_only.ply")
+            p4 = os.path.join(args.out, "realsense_board_only.ply")
+            o3d.io.write_point_cloud(p3, pc3, write_ascii=False)
+            o3d.io.write_point_cloud(p4, pc4, write_ascii=False)
+            print(f"    {os.path.relpath(p3, PROJECT_ROOT)}   {len(keep_d)} 点  <- 仅板面区域")
+            print(f"    {os.path.relpath(p4, PROJECT_ROOT)}   {len(keep_r)} 点  <- 仅板面区域")
+            print("\n  量精度请用 *_board_only.ply 这两份（直方图 = 精度本身）")
+            print("  整片版本适合看覆盖范围差异，不适合量精度")
+
         print("\n  CloudCompare 里怎么比:")
         print("    1) 两个 PLY 都拖进去（它们已经在同一坐标系，**不要再做对齐/ICP**）")
         print("    2) 各选一个 **... - Cloud** 子节点（不是 .ply 容器节点）")
         print("    3) Tools > Distances > Cloud/Cloud Dist（C2C）：Local modeling = 2D1/2，Max dist 0.05 m")
         print("       注意 C2C 的标量场只加在**先选中**的那片上 -> 想两边都看就交换顺序再跑一次")
+        print("    4) 看直方图时把 max distance 收到 0.02 m，避免最后一根无匹配柱子误导")
     return 0
 
 
