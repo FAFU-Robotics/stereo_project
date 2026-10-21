@@ -260,12 +260,13 @@ def main() -> int:
             total += 1
             bad += run_case(a.config, blur=blur, frames=a.frames, mode=mode)
 
-    # 阶段 7.2：三线程流水线单独跑一组（目前只接入了 depth 模式）
+    # 阶段 7.2：三线程流水线单独跑一组（depth 与 pointcloud 两条路径都接入了）
     # 说明：线程模式下"每帧都推理"变成"尽力推理"，所以不能用帧数判断，
     # 只要能看到推理结果并正常退出即可。
-    for blur in (False, True):
-        total += 1
-        bad += run_case(a.config, blur=blur, frames=a.frames, mode="depth", threaded=True)
+    for mode in ("depth", "pointcloud"):
+        for blur in (False, True):
+            total += 1
+            bad += run_case(a.config, blur=blur, frames=a.frames, mode=mode, threaded=True)
 
     # 顺带核对"自动保存"这条路径真的写出了东西（否则测试只覆盖了计算、没覆盖保存）
     produced = sorted(_out_dirs() - before)

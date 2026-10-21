@@ -810,25 +810,58 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
             print("  显示说明：窗口里把 y 轴翻成【向上】以便观看；"
                   "保存的点云/深度数据仍按相机坐标系（y 向下）")
 
+        # ---------------------------------------------------------------- 阶段 7.2
+        # 三线程流水线（与 --mode depth 共用同一个开关）：采集与推理放后台并行，
+        # 主线程只负责"点云构建 + 显示"。这样点云/显示（实测约 35ms）与下一次推理
+        # （164ms）重叠，帧周期从"相加"变成"取最大"。
+        threaded = bool(getattr(args, "threaded_mode", False))
+        pipe = None
+        if threaded:
+            from pipeline_threaded import ThreadedPipeline
+            pipe = ThreadedPipeline(cam, est, rectifier=rectifier).start()
+            print("  [流水线] 三线程已启用：采集/推理后台并行，主线程做点云与显示")
+
         while True:
             if not paused:
-                try:
-                    pair = cam.read()
-                except CameraReadError as exc:
-                    print(f"[读取错误] {exc}")
-                    break
-                # 阶段 5：已标定且启用时，先做去畸变+行对齐再送模型
-                # （点云用左图着色，所以 pair.left/right 也要一起换成校正后的图，
-                #   否则颜色会与深度错位）
-                if rectifier is not None:
-                    _l, _r = rectifier.rectify_pair(pair.left, pair.right)
-                    pair = FramePair(_l, _r, pair.t_left, pair.t_right,
-                                     pair.seq, pair.mode, pair.synced)
-                try:
-                    out = est.infer(pair.left, pair.right)
-                except FFSError as exc:
-                    print(f"[FFS 错误] {exc}")
-                    break
+                if pipe is not None:
+                    # ---- 线程模式：等下一份推理结果（帧已是校正后的图）----
+                    if pipe.error is not None:
+                        print(f"[流水线错误] {type(pipe.error).__name__}: {pipe.error}")
+                        break
+                    t_wait = time.perf_counter()
+                    while not pipe.has_new_result():
+                        if pipe.error is not None:
+                            print(f"[流水线错误] {type(pipe.error).__name__}: {pipe.error}")
+                            break
+                        if time.perf_counter() - t_wait > 60.0:
+                            print("[流水线错误] 等待推理结果超时（60s）")
+                            pipe.stop()
+                            return 2
+                        time.sleep(0.002)
+                    if pipe.error is not None:
+                        break
+                    rframe, out = pipe.take_result()
+                    if rframe is None or out is None:
+                        continue
+                    pair = rframe
+                else:
+                    try:
+                        pair = cam.read()
+                    except CameraReadError as exc:
+                        print(f"[读取错误] {exc}")
+                        break
+                    # 阶段 5：已标定且启用时，先做去畸变+行对齐再送模型
+                    # （点云用左图着色，所以 pair.left/right 也要一起换成校正后的图，
+                    #   否则颜色会与深度错位）
+                    if rectifier is not None:
+                        _l, _r = rectifier.rectify_pair(pair.left, pair.right)
+                        pair = FramePair(_l, _r, pair.t_left, pair.t_right,
+                                         pair.seq, pair.mode, pair.synced)
+                    try:
+                        out = est.infer(pair.left, pair.right)
+                    except FFSError as exc:
+                        print(f"[FFS 错误] {exc}")
+                        break
                 rec_infer_ms.append(out["timings_ms"]["infer"])
                 if len(rec_infer_ms) > 30:
                     rec_infer_ms.pop(0)
@@ -1022,6 +1055,12 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\n  收到 Ctrl+C，正在释放资源…")
     finally:
+        # 线程模式必须先停流水线，再关相机/模型（否则后台线程可能还在用它们）
+        try:
+            if pipe is not None:
+                pipe.stop()
+        except Exception:  # noqa: BLE001
+            pass
         cam.close()
         est.close()
         viewer.close()

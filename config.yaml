@@ -265,7 +265,7 @@ runtime:
   #         ⚠️ 视差会比画面滞后一点点，这是解耦的正常现象（不是 bug）
   # false = 原单线程串行路径（行为与之前完全一致）
   # 命令行 --threaded on/off 可临时覆盖本开关（目前只接入了 --mode depth）
-  threaded: false
+  threaded: true
   # 保存目录（相对项目根目录，均为程序生成的数据，不入库）
   save_dir: output
   save_raw: true           # 保存左右原始图像
