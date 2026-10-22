@@ -551,7 +551,7 @@ class StereoCamera:
             raise CameraError(
                 f"相机实际输出 {w}x{h}，与 config.yaml 请求的 {self.req_w}x{self.req_h} 不一致。\n"
                 "        这会让后续视差/点云与标定内参错位，所以这里直接失败而不是继续。\n"
-                "        排查：1) python tools\\probe_cameras.py 看该相机支持哪些分辨率；\n"
+                "        排查：1) python tools\\probe_camera_backends.py 看该相机支持哪些分辨率；\n"
                 "              2) 把 width/height 改成实际支持的值；\n"
                 "              3) 确认索引没指向虚拟摄像头/笔记本内置相机；\n"
                 "              4) 如确实允许降级，把 camera.verify_size 设为 false。"
@@ -689,7 +689,7 @@ class StereoCamera:
         lines += [
             "常见原因（按可能性）：",
             "  1) 设备被其他程序占用：相机 App / 会议软件 / 另一个 Python 进程；",
-            "  2) 索引因拔插或设备顺序变化指向了别的相机：运行 python tools\\probe_cameras.py 复核；",
+            "  2) 索引因拔插或设备顺序变化指向了别的相机：运行 python tools\\probe_camera_backends.py 复核；",
             "  3) 进程处于低完整性/沙箱/受限会话：Windows 会拒绝物理相机（E_ACCESSDENIED）；"
             "请改用普通 PowerShell 或桌面终端；",
             "  4) 驱动不接受该分辨率/格式：改 config.yaml 的 width/height/fourcc，"
@@ -813,7 +813,7 @@ class StereoCamera:
                     f"[警告] 画面无有效图像数据（左眼 mean={ml:.2f} std={sl:.2f}，"
                     f"右眼 mean={mr:.2f} std={sr:.2f}）。常见原因：\n"
                     "       1) 相机未真正出流（USB 端口/线材/供电，或用了 USB2 跑不动）；\n"
-                    "       2) 分辨率/FOURCC 未被驱动接受（见 tools/probe_cameras.py 结果）；\n"
+                    "       2) 分辨率/FOURCC 未被驱动接受（见 tools/probe_camera_backends.py 结果）；\n"
                     "       3) 镜头被遮挡 / 镜头盖未取下 / 环境全黑；\n"
                     "       4) 曝光未收敛（可增大 camera.warmup_frames）；\n"
                     "       5) 设备被其他程序占用。\n"

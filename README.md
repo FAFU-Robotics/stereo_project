@@ -27,7 +27,7 @@ D:\31931\Documents\stereo_project\tools\启动_普通权限.bat
 > 后普通 PowerShell 即可正常打开相机；详见
 > [docs/阶段1_相机权限复核_2026-10-21.md](docs/阶段1_相机权限复核_2026-10-21.md) 第 0 节。
 
-## 1. 环境（本机实测，见 [docs/阶段1_相机实测记录.md](docs/阶段1_相机实测记录.md)）
+## 1. 环境（本机实测，见 [docs/docs/README.md](docs/docs/README.md)）
 
 | 项目 | 值 |
 |---|---|
@@ -72,23 +72,23 @@ stereo_project/
 ├── pointcloud.py           点云生成 / 过滤 / 下采样 / PLY（阶段 4 创建）
 │
 ├── tools/
-│   ├── probe_cameras.py        相机只读探测（逐配置独立子进程，防驱动挂死）
+probe_camera_backends.py  后端/分辨率探测（MSMF vs DSHOW、是否免提权可用）
 │   ├── preview_any.py          单路相机预览/自检（不需要配置文件）
 │   ├── opencv_camera_check.py  独立相机自检（逐索引/后端，打印是否管理员，仅作对照）
 │   ├── offline_selftest.py     离线自检（假相机跑三种模式，不需要相机/管理员）
 │   ├── capture_calib.py        标定板可行性预检 / 后续的标定图采集（阶段 5）
 │   ├── bench_ffs.py            FFS 性能基准（每档重置峰值显存）
 │   ├── fetch_ffs_weights.py    下载官方研究版权重（纯标准库，含 Drive 确认令牌处理）
-│   ├── run_ffs_demo.py         官方示例图像验证（阶段 2 验收脚本，Windows 友好）
+bench_pipeline.py            分阶段耗时基准（校正/推理/点云/显示 + 显存）
 │   ├── 启动_普通权限.bat       ★主入口：普通权限 + 菜单（推荐）
 │   ├── 启动_管理员.bat         仅用于低完整性/沙箱环境的诊断（普通使用不需要）
-│   ├── 相机探测.bat            双击即可跑完整探测
+标定采集_新板7x9_26mm.bat   用 A4 ChArUco 板采集标定图（板参数在 .bat 顶部）
 │   ├── 相机状态检查.bat        帧服务器/HP 组件/DirectShow 抓帧诊断
 │   ├── 相机OpenCV自检.bat      普通权限自检（逐索引/后端）
-│   └── 阶段2_FFS官方示例.bat   双击即可跑阶段 2 验证
+bench_presets.py             三档预设的真实深度误差（已知距离，离线）
 │
 ├── docs/
-│   └── 阶段1_相机实测记录.md   本阶段全部实测证据与结论
+架构.md / README.md / 接口约定_SDK.md   模块地图、文档索引、GUI 契约
 │
 ├── third_party/
 │   └── Fast-FoundationStereo/  官方源码（**保持官方目录结构，不要改动**）
@@ -204,7 +204,7 @@ python tools\capture_calib.py --capture
 python main.py --list                                    REM 设备 + 索引快速扫描
 python tools\opencv_camera_check.py --quick              REM 快速全扫索引 0~9（一行一个结果）
 python tools\opencv_camera_check.py                      REM 详细自检（0~2、两种后端、含是否管理员）
-python tools\probe_cameras.py --index 1                  REM 逐配置探测单个索引
+python tools\probe_camera_backends.py 逐配置探测单个索引
 python tools\preview_any.py --index 1                    REM 单路预览/自检
 python tools\dshow_capture_test.py --index 1             REM 绕开 OpenCV 的 DirectShow 抓帧诊断
 REM 或双击：tools\相机状态检查.bat（帧服务器 / HP 组件 / DirectShow 抓帧诊断）
@@ -221,14 +221,14 @@ REM ① 下载官方研究版权重（约 100 MB 级；也可用浏览器手动�
 python tools\fetch_ffs_weights.py
 
 REM ② 只检查权重与环境（秒回，不加载模型）
-python tools\run_ffs_demo.py --check-only
+bench_pipeline.py            分阶段耗时基准（校正/推理/点云/显示 + 显存）
 
 REM ③ 正式跑官方示例图像（--repeat 3 统计稳定耗时）
-python tools\run_ffs_demo.py --repeat 3
+bench_pipeline.py            分阶段耗时基准（校正/推理/点云/显示 + 显存）
 
 REM    其他常用：缩小输入提速 / 不看窗口 / 不生成点云
-python tools\run_ffs_demo.py --scale 0.5 --repeat 5 --no-display
-python tools\run_ffs_demo.py --valid-iters 4 --max-disp 192
+bench_pipeline.py            分阶段耗时基准（校正/推理/点云/显示 + 显存）
+bench_pipeline.py            分阶段耗时基准（校正/推理/点云/显示 + 显存）
 ```
 
 ## 4. 阶段进度
@@ -294,7 +294,7 @@ icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
    若又是 `Low`，重新执行 `icacls ... /setintegritylevel Medium`。
    重装/升级 Python 或 DSH 重新给工作区打标签后，标签可能恢复成 Low。
 
-> 历史取证（2026-09-30）仍保留在 [docs/阶段1_相机根因分析.md](docs/阶段1_相机根因分析.md)，
+> 历史取证（2026-09-30）仍保留在 [docs/docs/相机权限修复_管理员操作步骤.md](docs/docs/相机权限修复_管理员操作步骤.md)，
 > 其中第 12 节的"必须管理员"已被本次复核取代。
 
 ## 6. 已知限制

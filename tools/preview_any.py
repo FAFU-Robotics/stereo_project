@@ -60,7 +60,7 @@ def main() -> int:
     cap = cv2.VideoCapture(args.index, api)
     if not cap.isOpened():
         print("  [失败] 打不开。可能：索引不对 / 设备被占用 / 该后端不支持按索引打开。")
-        print("  建议：python tools\\probe_cameras.py --index", args.index)
+        print("  建议：python tools\\probe_camera_backends.py --index", args.index)
         return 2
 
     if args.fourcc:

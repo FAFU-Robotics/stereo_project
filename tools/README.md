@@ -10,11 +10,9 @@
 |---|---|---|
 | `启动_普通权限.bat` | 主启动器（普通权限，推荐）| ❌ |
 | `启动_管理员.bat` | 主启动器（管理员；含标定采集等入口）| ✅ |
-| `相机探测.bat` | 枚举相机、基本信息 | ❌ |
 | `相机OpenCV自检.bat` | 用 OpenCV 单独验证能否开相机 | ❌ |
 | `相机状态检查.bat` | DShow 直连测试（排查 `0x80070005`）| 视情况 |
 | `标定采集_新板7x9_26mm.bat` | 用 A4 ChArUco 板采集标定图（板参数在文件顶部 `SQ=26.0`）| ✅ |
-| `阶段2_FFS官方示例.bat` | 跑官方 FFS demo（验证环境）| ❌ |
 
 ## 二、正式工具（会被反复用）
 
@@ -29,13 +27,11 @@
 | `aruco_align.py` | ChArUco 位姿 → 把点云变换到板坐标系（跨相机对齐）|
 | `compare_with_realsense.py` | 自制相机 vs RealSense 点云一致性（导出板坐标系 PLY）|
 | `fetch_ffs_weights.py` | 下载/校验 FFS 权重 |
-| `run_ffs_demo.py` | 官方 demo 封装（阶段 2 用）|
 
 ## 三、一次性探测脚本（排查环境用，留档备查）
 
 | 文件 | 用途 |
 |---|---|
-| `probe_cameras.py` | 枚举相机并试多种后端/分辨率（早期的探测工具）|
 | `probe_camera_backends.py` | **后端/分辨率探测**：MSMF vs DSHOW、是否命中 1280×480、真实帧率、左右亮度差 |
 | `opencv_camera_check.py` | OpenCV 能否开相机的独立小测（含版本对比）|
 | `dshow_capture_test.py` | DirectShow 直连（低层测试，用于区分"权限"与"占用"）|

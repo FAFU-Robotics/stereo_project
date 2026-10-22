@@ -164,7 +164,7 @@ def run_list(cfg: Dict[str, Any]) -> int:
             )
         else:
             print(f"  索引 {idx}: 不可用（{r['error']}）")
-    print("\n提示：完整探测请运行  python tools/probe_cameras.py")
+    print("\n提示：完整探测请运行  python tools/probe_camera_backends.py")
     return 0
 
 
@@ -216,7 +216,7 @@ def run_preview(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     pair = cam.read()
                 except CameraReadError as exc:
                     print(f"[错误] {exc}")
-                    print("       建议：检查 USB 连接/供电，或运行 python tools/probe_cameras.py 复查。")
+                    print("       建议：检查 USB 连接/供电，或运行 python tools/probe_camera_backends.py 复查。")
                     break
                 last_left, last_right = pair.left, pair.right
                 frame_i += 1
