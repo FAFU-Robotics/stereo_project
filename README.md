@@ -14,7 +14,7 @@ D:\31931\Documents\stereo_project\tools\启动_普通权限.bat
 > **2026-10-21 复核结论**：普通用户权限（Medium 完整性）下，索引 1 + `CAP_DSHOW`
 > 能稳定打开 1280×480 双目画面（左右各 640×480），实测 30 帧 0 失败、0 黑屏、正常释放。
 > **不需要管理员权限**。旧文档里"必须提权"的说法已经过时，原因见
-> [docs/阶段1_相机权限复核_2026-10-21.md](docs/阶段1_相机权限复核_2026-10-21.md)。
+> [docs/docs/README.md](docs/docs/README.md)。
 >
 > ⚠️ 只有在"低完整性 / 沙箱 / 受限会话"里运行时，Windows 才会拒绝物理相机
 > （`E_ACCESSDENIED`）。`tools\启动_管理员.bat` 仅保留作受限环境的诊断入口。
@@ -25,7 +25,7 @@ D:\31931\Documents\stereo_project\tools\启动_普通权限.bat
 > icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
 > ```
 > 后普通 PowerShell 即可正常打开相机；详见
-> [docs/阶段1_相机权限复核_2026-10-21.md](docs/阶段1_相机权限复核_2026-10-21.md) 第 0 节。
+> [docs/docs/README.md](docs/docs/README.md) 第 0 节。
 
 ## 1. 环境（本机实测，见 [docs/docs/README.md](docs/docs/README.md)）
 
@@ -268,12 +268,12 @@ icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
 
 后，普通 PowerShell 里 Python 令牌变为 `S-1-16-8192`（Medium），索引 1 可正常输出
 1280×480；**不需要管理员**。完整步骤与注意事项见
-[docs/阶段1_相机权限复核_2026-10-21.md](docs/阶段1_相机权限复核_2026-10-21.md) 第 0 节。
+[docs/docs/README.md](docs/docs/README.md) 第 0 节。
 
 **旧结论（2026-09-30，已过时）**：普通权限进程打开物理相机 → `HRESULT 0x80070005 (E_ACCESSDENIED)`，
 当时用管理员权限绕过。
 
-**2026-10-21 复核**（完整证据见 [docs/阶段1_相机权限复核_2026-10-21.md](docs/阶段1_相机权限复核_2026-10-21.md)）：
+**2026-10-21 复核**（完整证据见 [docs/docs/README.md](docs/docs/README.md)）：
 
 | 进程令牌 / 场景 | DirectShow `BindToObject` | 项目 `main.py` 实际采集 |
 |---|---|---|
@@ -294,7 +294,7 @@ icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
    若又是 `Low`，重新执行 `icacls ... /setintegritylevel Medium`。
    重装/升级 Python 或 DSH 重新给工作区打标签后，标签可能恢复成 Low。
 
-> 历史取证（2026-09-30）仍保留在 [docs/docs/相机权限修复_管理员操作步骤.md](docs/docs/相机权限修复_管理员操作步骤.md)，
+> 历史取证（2026-09-30）仍保留在 [docs/docs/docs/README.md](docs/docs/docs/README.md)，
 > 其中第 12 节的"必须管理员"已被本次复核取代。
 
 ## 6. 已知限制

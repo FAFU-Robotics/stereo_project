@@ -42,11 +42,14 @@ class ThreadedPipeline:
     """采集 + 推理 两个后台线程；主线程按自己的节奏取最新帧/最新结果显示。"""
 
     def __init__(self, cam: Any, est: Any, rectifier: Any = None,
-                 log: Optional[Any] = None) -> None:
+                 log: Optional[Any] = None, post_fn: Optional[Any] = None) -> None:
         self.cam = cam
         self.est = est
         self.rectifier = rectifier
         self.log = log or (lambda *a, **k: None)
+        # post_fn(frame, out) -> out'：推理之后的处理（深度换算、上采样、点云构建）
+        # 也放在这条线程里做，这样 UI 线程 take_result() 拿到的就是可直接显示的成品。
+        self.post_fn = post_fn
 
         self._lock = threading.Lock()
         self._frame: Optional[FramePair] = None      # 最新采集帧（原始）
@@ -95,6 +98,12 @@ class ThreadedPipeline:
                 if self.rectifier is not None:
                     left, right = self.rectifier.rectify_pair(left, right)
                 res = self.est.infer(left, right)
+                rframe = FramePair(left, right, pair.t_left, pair.t_right,
+                                   pair.seq, pair.mode, pair.synced)
+                # 推理后的处理（深度换算/上采样/点云）也放在本线程，
+                # 这样 take_result() 拿到的就是成品，UI 线程永不阻塞。
+                if self.post_fn is not None:
+                    res = self.post_fn(rframe, res)
             except BaseException as exc:      # noqa: BLE001
                 self.error = exc
                 self._stop.set()
@@ -103,8 +112,7 @@ class ThreadedPipeline:
             now = time.perf_counter()
             with self._lock:
                 self._result = res
-                self._result_frame = FramePair(left, right, pair.t_left, pair.t_right,
-                                               pair.seq, pair.mode, pair.synced)
+                self._result_frame = rframe
                 self._result_seq += 1
                 self._inf_ts.append(now)
                 if len(self._inf_ts) > 31:
