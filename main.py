@@ -1095,6 +1095,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mode", default="preview", choices=["preview", "depth", "pointcloud"],
                    help="preview=实时双目预览(阶段1)  depth=实时视差(阶段3)  pointcloud=点云(阶段4)")
     p.add_argument("--list", action="store_true", help="只列出相机设备信息后退出")
+    p.add_argument("--use-runtime", action="store_true",
+                   help="阶段1重构：用 stereo_sdk.Session + runtime.DisplayRuntime 新链路（默认走旧链路）")
     p.add_argument("--no-display", action="store_true", help="不开窗口（用于自动化测试）")
     p.add_argument("--max-frames", type=int, default=0, help="跑满 N 帧后自动退出（0=不限制）")
     p.add_argument("--duration", type=float, default=0.0, help="运行 N 秒后自动退出（0=不限制）")
@@ -1116,6 +1118,54 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _run_via_runtime(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
+    """阶段 1 重构：走 stereo_sdk.Session + runtime.DisplayRuntime 的新链路。
+
+    与旧链路的关系：
+        · 数据路径完全相同（Session 内部就是 采集→校正→推理→深度→点云）
+        · 本函数只做"显示循环 + 按键"，旧循环完全不动，可随时用 --use-runtime 对比
+        · 用 --use-runtime 时才走这里，默认行为不变（零风险切换）
+    """
+    import yaml as _yaml
+    from runtime import DisplayRuntime
+    from stereo_sdk.session import Session
+
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    print("=" * 88)
+    print("  新版运行时（stereo_sdk.Session + runtime.DisplayRuntime）")
+    print("=" * 88)
+
+    viewer = None
+    if not args.no_display:
+        viewer = StereoViewer(
+            window_name=str(runtime_cfg.get("window_name", "stereo_project")),
+            display_scale=float(args.display_scale if args.display_scale is not None
+                                else runtime_cfg.get("display_scale", 1.0)),
+        )
+    sess = Session(args.config)
+    print("  加载相机与模型（首次约 3~10 秒）…")
+    sess.start()
+    perf_csv = ""
+    if runtime_cfg.get("perf_csv", True):
+        perf_csv = os.path.join(args.config.rsplit(os.sep, 1)[0] if os.sep in args.config else ".",
+                                "output", "logs", "perf.csv")
+    try:
+        rt = DisplayRuntime(sess, viewer=viewer, mode=args.mode,
+                            no_display=args.no_display, max_frames=args.max_frames,
+                            duration=args.duration, perf_csv=perf_csv)
+        rc = rt.run()
+        st = sess.stats()
+        print(f"  结束: frames={rt._frames} capture={st.get('capture_fps', 0):.1f} fps "
+              f"infer={st.get('infer_fps', 0):.2f} fps preset={st.get('preset')}")
+        if rt.prof.summary():
+            print(rt.prof.format_table())
+        return rc
+    finally:
+        sess.stop()
+        if viewer is not None:
+            viewer.close()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -1123,6 +1173,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[配置错误] {exc}")
         return 1
+
+    if getattr(args, "use_runtime", False):
+        return _run_via_runtime(cfg, args)
 
     if args.list:
         return run_list(cfg)
