@@ -27,6 +27,7 @@ import numpy as np
 import yaml
 
 from .types import (HOT_PARAMS, RESTART_PARAMS, SDK_VERSION, DepthResult, FramePair)
+from profiler import Profiler  # 统一阶段耗时统计（任务1）
 from .recorder import Recorder
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,6 +72,7 @@ class Session:
         self._preset = "balanced"
         self._zmin, self._zmax = 0.15, 3.0
         self._infer_ms = deque(maxlen=30)
+        self.prof = Profiler(window=60)   # capture/rectify/infer/cloud/display 滚动统计
         self._t_infer = 0.0
 
     # ------------------------------------------------------------------ 生命周期
@@ -203,6 +205,12 @@ class Session:
             if len(pcd.colors) else np.zeros((0, 3), np.uint8)
         timings = {k: float(v) for k, v in (out.get("timings_ms") or {}).items()}
         timings["cloud"] = cloud_ms
+        # 统一统计（缺失的阶段 tick 会自动丢弃，不会记成 0）
+        self.prof.tick("capture", timings.get("capture"))
+        self.prof.tick("rectify", timings.get("rectify"))
+        self.prof.tick("infer", timings.get("infer"))
+        self.prof.tick("cloud", cloud_ms)
+        self.prof.mark("frame")
         timings.setdefault("capture", 0.0)
         timings.setdefault("display", 0.0)
         res = DepthResult(frame=frame, disparity=np.asarray(disp, np.float32),
@@ -321,6 +329,7 @@ class Session:
             out["valid_ratio"] = float(res.valid.mean()) * 100.0 if res.valid.size else 0.0
             out["median_m"] = float(np.median(res.depth[res.valid])) if res.valid.any() else 0.0
             out["points"] = int(len(res.points))
+        out["stages"] = self.prof.summary()   # {stage: {n,mean,p50,p95,max}}
         return out
 
     def last_error(self) -> Optional[str]:
