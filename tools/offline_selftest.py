@@ -164,7 +164,7 @@ class FakeEstimator:
 
 # -----------------------------------------------------------------------------
 def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud",
-             threaded: bool = False) -> int:
+             threaded: bool = False, use_runtime: bool = False) -> int:
     """跑一个场景，返回 0=通过 / 非 0=失败。
 
     mode: preview（阶段1）/ depth（阶段3）/ pointcloud（阶段4）
@@ -204,6 +204,9 @@ def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud",
         ]
         if mode == "pointcloud":
             cli.append("--no-cloud-window")   # 不开 Open3D 窗口
+        if use_runtime:
+            cli = [c for c in cli if c != "--no-cloud-window"]
+            cli.append("--use-runtime")
         args = main_mod.build_parser().parse_args(cli)
         # 阶段 7.2：直接调 runner 会绕过 main() 的 --threaded 解析，这里手动补上
         args.threaded_mode = bool(threaded)
@@ -213,6 +216,14 @@ def run_case(cfg_path: str, blur: bool, frames: int, mode: str = "pointcloud",
         # 就会把**合成数据**写进 output/captures/，混进真实测量数据里很难分辨
         # （实测踩过：13 个目录的假数据混入 output/captures，视差统计量完全相同才被发现）。
         cfg["project"]["output_dir"] = OUT_DIR
+        # 新链路的 Session 是读**配置文件**的，所以把补丁后的 cfg 落成临时 yaml，
+        # 否则它会用真实 config.yaml 里的 output/，把假数据写进真实采集目录。
+        import yaml as _yaml
+        tmp_cfg = os.path.join(OUT_DIR, f"cfg_selftest_{mode}_{int(blur)}.yaml")
+        os.makedirs(OUT_DIR, exist_ok=True)
+        with open(tmp_cfg, "w", encoding="utf-8") as _fh:
+            _yaml.safe_dump(cfg, _fh, allow_unicode=True)
+        args.config = tmp_cfg
         # 把异常接住并转成"失败"，而不是让自检脚本自己崩掉 ——
         # 这样报告里能直接看到异常类型与消息（例如 UnboundLocalError: sharp_warned）
         runner = {"preview": main_mod.run_preview,
@@ -267,6 +278,11 @@ def main() -> int:
         for blur in (False, True):
             total += 1
             bad += run_case(a.config, blur=blur, frames=a.frames, mode=mode, threaded=True)
+
+    # 阶段 1 重构：新链路（stereo_sdk.Session + runtime.DisplayRuntime）
+    for mode in ("depth", "pointcloud"):
+        total += 1
+        bad += run_case(a.config, blur=False, frames=a.frames, mode=mode, use_runtime=True)
 
     # 顺带核对"自动保存"这条路径真的写出了东西（否则测试只覆盖了计算、没覆盖保存）
     produced = sorted(_out_dirs() - before)
