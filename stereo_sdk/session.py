@@ -36,6 +36,22 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PRESETS: Dict[str, tuple] = {"precise": (1.0, 8), "balanced": (0.75, 8), "fast": (0.5, 4)}
 
 
+def _is_oom(exc: BaseException) -> bool:
+    """粗判显存不足（不 import torch，避免在没 GPU 的环境里额外拉 CUDA）。
+    同时认 torch 的 OutOfMemoryError 与各种 'out of memory' 文本。"""
+    txt = f"{type(exc).__name__}: {exc}".lower()
+    return ("outofmemory" in txt) or ("out of memory" in txt)
+
+
+def _next_lower(scale: float):
+    """降一档: 1.0 -> (0.75, 8) -> (0.5, 4) -> None"""
+    if scale > 0.9:
+        return (0.75, 8)
+    if scale > 0.6:
+        return (0.5, 4)
+    return None
+
+
 def _resolve_paths(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """把 config 里的相对路径改成绝对路径（与 tools/bench_* 的约定一致）。"""
     project_cfg = dict(cfg.get("project", {}) or {})
@@ -125,8 +141,33 @@ class Session:
         self._est.load()
 
         # 预热（用真实画面，尺寸必须与正式推理一致）
+        # 稳定性⑤: 显存不足时自动降一档预设后重试（小显存机器不至于直接崩）
         first = self._cam.read()
-        self._est.warmup(self._est.warmup_iters, left=first.left, right=first.right)
+        retried = 0
+        while True:
+            try:
+                self._est.warmup(self._est.warmup_iters, left=first.left, right=first.right)
+                break
+            except BaseException as exc:  # noqa: BLE001
+                lower = _next_lower(float(ffs_cfg.get("scale", 1.0) or 1.0))
+                if not _is_oom(exc) or lower is None or retried >= 2:
+                    raise
+                retried += 1
+                old_desc = f"scale={ffs_cfg.get('scale')} iters={ffs_cfg.get('valid_iters')}"
+                ffs_cfg["scale"], ffs_cfg["valid_iters"] = lower
+                self._preset = "fast" if lower[0] <= 0.5 else "balanced"
+                self._error = (f"显存不足（{type(exc).__name__}），已自动降档到 "
+                               f"scale={lower[0]} iters={lower[1]}；原设置 {old_desc}。"
+                               f"如需恢复请调小 ffs.scale 或关闭占用显存的程序。")
+                try:
+                    self._est.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._est = FFSDepthEstimator(project_cfg, ffs_cfg)
+                ok, msg = self._est.weights_ready()
+                if not ok:
+                    raise RuntimeError(f"FFS 权重不可用：{msg}")
+                self._est.load()
 
         self._params = CameraParams.from_config(cfg, eye_size=self._cam.eye_size)
         pc_cfg = dict(cfg.get("pointcloud", {}) or {})
@@ -145,7 +186,9 @@ class Session:
         self._pipe = ThreadedPipeline(self._cam, self._est, rectifier=self._rect,
                                       post_fn=self._postprocess).start()
         self._started = True
-        self._error = None
+        # 注意: 不能无脑清空 _error —— OOM 自动降档等警告是在 start() 里产生的，
+        # 清掉的话用户就看不到"已降档"这条重要提示了。只在没有消息时置空。
+        self._error = self._error or None
 
     def stop(self) -> None:
         """幂等；GUI 退出时务必调用。"""
