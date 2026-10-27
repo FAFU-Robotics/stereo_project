@@ -78,6 +78,9 @@ class DisplayRuntime:
         self.prof = getattr(session, "prof", None) or Profiler(window=60)
         self.log = get_logger()
         self.paused = False
+        # 3D 点云窗口（点云模式 + 有窗口时启用）—— 功能对齐旧链路
+        self.vis3d = None
+        self.show3d = (self.mode == "pointcloud") and (not self.no_display)
         self._frames = 0
         self._t_start = time.perf_counter()
         self._last_perf = 0.0
@@ -144,6 +147,8 @@ class DisplayRuntime:
             else:
                 zmin, zmax = max(0.02, zmin + step), zmax + step
             self._params.update(self.s.set_params(zmin=zmin, zmax=zmax).get("applied", {}))
+        elif ch == "o" and self.mode == "pointcloud":
+            self._toggle_3d()
         elif ch == "m":
             cur = str(self._params.get("preset", "balanced"))
             nxt = _PRESET_CYCLE[(_PRESET_CYCLE.index(cur) + 1) % len(_PRESET_CYCLE)] \
@@ -167,6 +172,7 @@ class DisplayRuntime:
                 r = self.s.take_result()
                 if r is not None:
                     last_res = r
+                    self._update_3d(r)
             if self.paused:
                 time.sleep(0.03)
             if last_frame is not None or last_res is not None:
@@ -189,9 +195,39 @@ class DisplayRuntime:
             if self.no_display:
                 time.sleep(0.01)
             self._maybe_perf()
+        if self.vis3d is not None:
+            self.vis3d.close()
+            self.vis3d = None
         if self.perf_csv:
-            self.prof.to_csv(self.perf_csv, {"frames": self._frames})
+            self.prof.to_csv(self.perf_csv, self._perf_extra())
         return 0
+
+    # ------------------------------------------------------------------ 3D
+    def _update_3d(self, res: Any) -> None:
+        """刷新 3D 点云窗口；窗口被用户关掉后自动停用（不报错）。"""
+        if not self.show3d or res is None or not len(getattr(res, "points", ())):
+            return
+        if self.vis3d is None:
+            try:
+                from view3d import CloudWindow3D
+                self.vis3d = CloudWindow3D(point_size=float(self._params.get("point_size", 2.0) or 2.0))
+                self.log.info("3D 点云窗口已打开（o 键开关）")
+            except Exception as exc:  # noqa: BLE001
+                self.show3d = False
+                self.log.warning("3D 窗口打不开，已停用：%s", exc)
+                return
+        if not self.vis3d.update(res.points, res.colors):
+            self.vis3d = None
+            self.show3d = False
+            self.log.info("3D 点云窗口已关闭，后续不再刷新")
+
+    def _toggle_3d(self) -> None:
+        if self.vis3d is not None:
+            self.vis3d.close()
+            self.vis3d = None
+            self.show3d = False
+        else:
+            self.show3d = True
 
     def _maybe_perf(self) -> None:
         now = time.perf_counter()
