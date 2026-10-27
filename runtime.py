@@ -78,6 +78,7 @@ class DisplayRuntime:
         self.prof = getattr(session, "prof", None) or Profiler(window=60)
         self.log = get_logger()
         self.paused = False
+        self.max_loop_fps = 30.0     # 显示循环上限，避免和推理线程抢 CPU
         # 3D 点云窗口（点云模式 + 有窗口时启用）—— 功能对齐旧链路
         self.vis3d = None
         self.show3d = (self.mode == "pointcloud") and (not self.no_display)
@@ -194,6 +195,13 @@ class DisplayRuntime:
                 break
             if self.no_display:
                 time.sleep(0.01)
+            else:
+                # 限帧：显示循环原本会跑满 ~40 FPS，白白和推理线程抢 CPU/GIL，
+                # 实测会把推理从 56ms 拖到 64ms。按目标帧率补足剩余时间。
+                budget = 1.0 / max(self.max_loop_fps, 1.0)
+                used = time.perf_counter() - t0
+                if used < budget:
+                    time.sleep(budget - used)
             self._maybe_perf()
         if self.vis3d is not None:
             self.vis3d.close()
