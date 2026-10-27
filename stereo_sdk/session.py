@@ -101,8 +101,16 @@ class Session:
             self._preset = "custom"
 
         self._params = None
+        # 稳定性加固②: 先抢单实例锁（防两个进程抢同一台相机导致"时好时坏"），
+        # 再带重试打开相机（占用类失败会 5 次 x 300ms 退避并给出可读排查步骤）。
+        from camera_guard import acquire_camera_lock, open_with_retry, release_camera_lock
+        acquire_camera_lock()
         self._cam = StereoCamera(cfg.get("camera", {}) or {})
-        self._cam.open()
+        try:
+            open_with_retry(self._cam)
+        except BaseException:
+            release_camera_lock()          # 打不开就别占着锁
+            raise
         try:
             self._rect = load_rectifier(cfg)
         except Exception as exc:  # noqa: BLE001
@@ -156,6 +164,11 @@ class Session:
                 self._est.close()
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            from camera_guard import release_camera_lock
+            release_camera_lock()
+        except Exception:  # noqa: BLE001
+            pass
         self._pipe = self._cam = self._est = None
         self._started = False
 
