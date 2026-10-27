@@ -75,7 +75,7 @@ stereo_project/
 probe_camera_backends.py  后端/分辨率探测（MSMF vs DSHOW、是否免提权可用）
 │   ├── preview_any.py          单路相机预览/自检（不需要配置文件）
 │   ├── opencv_camera_check.py  独立相机自检（逐索引/后端，打印是否管理员，仅作对照）
-│   ├── offline_selftest.py     离线自检（假相机跑三种模式，不需要相机/管理员）
+│   ├── test_pipeline_offline.py     离线自检（假相机跑三种模式，不需要相机/管理员）
 │   ├── capture_calib.py        标定板可行性预检 / 后续的标定图采集（阶段 5）
 │   ├── bench_ffs.py            FFS 性能基准（每档重置峰值显存）
 │   ├── fetch_ffs_weights.py    下载官方研究版权重（纯标准库，含 Drive 确认令牌处理）
@@ -146,8 +146,8 @@ python main.py --mode pointcloud --no-display --no-cloud-window --max-frames 3
 ### 离线自检（改代码后建议先跑这个：不需要相机，也不需要管理员）
 
 ```bat
-python tools\offline_selftest.py            REM 三种模式 × 清晰/模糊 共 6 个场景
-python tools\offline_selftest.py --frames 25
+python tools\test_pipeline_offline.py            REM 三种模式 x 清晰/模糊 + 三线程 + 新链路 共 12 个场景
+python tools\test_pipeline_offline.py --frames 25
 ```
 
 它用**假相机 + 假模型**把 `preview` / `depth` / `pointcloud` 三条实时链路完整跑一遍，
