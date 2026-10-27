@@ -18,7 +18,7 @@
 
 | 文件 | 用途 |
 |---|---|
-| `offline_selftest.py` | **离线自检 10 场景**（不开相机、不用真权重、不需管理权）。改代码后必跑 |
+| `test_pipeline_offline.py` | **离线自检 10 场景**（不开相机、不用真权重、不需管理权）。改代码后必跑 |
 | `capture_calib.py` | 标定图采集 + 质量门（清晰度/对比度/每格像素/姿态清单）|
 | `run_calibration.py` | 计算双目标定 + 极线验证 + 写 `calibration/stereo_calib.yaml` |
 | `bench_pipeline.py` | **分阶段**耗时（校/推理/点云/显示）+ 三线程估算 + 显存 |

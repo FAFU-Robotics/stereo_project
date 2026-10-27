@@ -146,8 +146,8 @@ python main.py --mode pointcloud --no-display --no-cloud-window --max-frames 3
 ### 离线自检（改代码后建议先跑这个：不需要相机，也不需要管理员）
 
 ```bat
-python tools\test_pipeline_offline.py            REM 三种模式 x 清晰/模糊 + 三线程 + 新链路 共 12 个场景
-python tools\test_pipeline_offline.py --frames 25
+python tests\test_pipeline_offline.py            REM 三种模式 x 清晰/模糊 + 三线程 + 新链路 共 12 个场景
+python tests\test_pipeline_offline.py --frames 25
 ```
 
 它用**假相机 + 假模型**把 `preview` / `depth` / `pointcloud` 三条实时链路完整跑一遍，

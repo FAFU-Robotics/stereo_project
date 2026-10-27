@@ -27,7 +27,7 @@
 
 | 想做什么 | 命令 |
 |---|---|
-| 跑离线自检（不开相机、不需要管理权）| `python tools\offline_selftest.py` |
+| 跑离线自检（不开相机、不需要管理权）| `python tests\test_pipeline_offline.py` |
 | 分阶段性能基准 | `python tools\bench_pipeline.py` |
 | 各预设的深度精度 | `python tools\bench_presets.py` |
 | 只测推理耗时 | `python tools\bench_ffs.py` |
