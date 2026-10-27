@@ -40,6 +40,7 @@ if PROJECT_ROOT not in sys.path:
 
 from depth_utils import colorize_depth  # noqa: E402
 from profiler import Profiler           # noqa: E402
+from logger import get_logger, setup  # noqa: E402  日志落盘（稳定性③）
 
 _PRESET_CYCLE = ("precise", "balanced", "fast")
 
@@ -75,6 +76,7 @@ class DisplayRuntime:
         self.perf_csv = perf_csv
         self.perf_every_s = float(perf_every_s)
         self.prof = getattr(session, "prof", None) or Profiler(window=60)
+        self.log = get_logger()
         self.paused = False
         self._frames = 0
         self._t_start = time.perf_counter()
@@ -196,6 +198,15 @@ class DisplayRuntime:
         if self.perf_csv and (now - self._last_perf) >= self.perf_every_s:
             self._last_perf = now
             self.prof.to_csv(self.perf_csv, self._perf_extra())
+            try:
+                extra = self._perf_extra()
+                st = self.s.stats() if hasattr(self.s, "stats") else {}
+                self.log.info("frames=%d fps=%.2f infer_fps=%.2f rss=%.0fMB vram=%.0fMB | %s",
+                              self._frames, self.prof.fps("frame") or 0.0,
+                              st.get("infer_fps", 0.0), extra.get("rss_mb", 0) or 0,
+                              extra.get("vram_mb", 0) or 0, self.prof.summary_text())
+            except Exception:  # noqa: BLE001 —— 日志不允许拖垮主循环
+                pass
 
     def _perf_extra(self) -> Dict[str, Any]:
         """perf.csv 的附加列：帧数 + 内存/显存采样（监控失败不能拖垮主循环）。"""
@@ -335,6 +346,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--perf-csv", default="")
     ap.add_argument("--no-display", action="store_true")
     a = ap.parse_args(argv)
+    log = setup(os.path.join(PROJECT_ROOT, "output", "logs"))
+    log.info("启动: mode=%s display=%s max_frames=%d duration=%.1fs config=%s",
+             a.mode, not a.no_display, a.max_frames, a.duration, a.config)
     if a.selftest:
         return _selftest()
     from stereo_sdk.session import Session
@@ -349,12 +363,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         viewer = StereoViewer(cfg.get("runtime", {}) or {})
     rt = DisplayRuntime(s, viewer=viewer, mode=a.mode, no_display=a.no_display,
                         max_frames=a.max_frames, duration=a.duration, perf_csv=a.perf_csv)
+    rc = 2
     try:
-        return rt.run()
+        rc = rt.run()
+        log.info("正常结束: frames=%d", rt._frames)
+        return rc
+    except BaseException:
+        # 稳定性④: 顶层兜底 —— 任何未捕获异常都记进日志（含 traceback），
+        # 仍然释放相机与窗口，避免"进程还在但相机被占着"
+        log.exception("运行时异常退出（frames=%d）", rt._frames)
+        return 2
     finally:
         s.stop()
         if viewer is not None:
             viewer.close()
+        log.info("资源已释放（rc=%s）", rc)
 
 
 if __name__ == "__main__":
