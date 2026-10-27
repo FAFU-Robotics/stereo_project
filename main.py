@@ -684,6 +684,12 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     # Open3D 体积大、导入慢，只在点云模式里按需导入（预览/视差模式不必付这个开销）
     try:
         import open3d as o3d
+        # 静音 Open3D 的 SetViewPoint 刷屏告警（窗口不可见/尺寸未定时每帧一条），
+        # 原因与处理见 pointcloud.py 顶部注释。
+        try:
+            o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
+        except Exception:  # noqa: BLE001
+            pass
     except ImportError:
         print("[错误] 未安装 open3d，无法使用 --mode pointcloud")
         return 5

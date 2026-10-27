@@ -32,6 +32,14 @@ import numpy as np
 
 try:
     import open3d as o3d
+    # Open3D 在窗口尺寸未确定/窗口不可见时，会**每帧**打印
+    #   [Open3D WARNING] [ViewControl] SetViewPoint() failed because window height and width are not set.
+    # 这是 Open3D 自己的已知告警，不是本项目的错误；把级别抬到 Error 可彻底静音
+    # （真正的 Error 仍会打印）。需要排错时把它改回 Warning 即可。
+    try:
+        o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
+    except Exception:  # noqa: BLE001
+        pass
 except Exception:  # noqa: BLE001 —— 没有 open3d 时仍允许导入本模块（仅导出/统计用）
     o3d = None
 
