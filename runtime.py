@@ -136,7 +136,7 @@ class DisplayRuntime:
         elif ch == "i":
             print(f"  [状态] {self.s.stats()}")
             print(f"  [参数] {self._params}")
-        elif ch == "p":
+        elif ch in ("p", "s"):          # s 是旧链路的保存键，保留习惯
             d = self.s.save_snapshot() if hasattr(self.s, "save_snapshot") else ""
             print(f"  [保存] {d or '（还没有结果，未保存）'}")
         elif ch in "[]":

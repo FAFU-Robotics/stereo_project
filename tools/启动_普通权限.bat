@@ -60,9 +60,9 @@ echo   [0] Exit
 echo ============================================================
 set "CH="
 set /p "CH=Type 1..5 or 0 then press Enter: "
-if "%CH%"=="1" "%PY%" main.py
-if "%CH%"=="2" "%PY%" main.py --mode depth
-if "%CH%"=="3" "%PY%" main.py --mode pointcloud
+if "%CH%"=="1" "%PY%" main.py --use-runtime
+if "%CH%"=="2" "%PY%" main.py --mode depth --use-runtime
+if "%CH%"=="3" "%PY%" main.py --mode pointcloud --use-runtime
 if "%CH%"=="4" "%PY%" tools\opencv_camera_check.py --quick
 if "%CH%"=="5" "%PY%" main.py --list
 if "%CH%"=="0" goto done
