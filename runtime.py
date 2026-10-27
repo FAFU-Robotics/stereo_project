@@ -195,7 +195,17 @@ class DisplayRuntime:
         now = time.perf_counter()
         if self.perf_csv and (now - self._last_perf) >= self.perf_every_s:
             self._last_perf = now
-            self.prof.to_csv(self.perf_csv, {"frames": self._frames})
+            self.prof.to_csv(self.perf_csv, self._perf_extra())
+
+    def _perf_extra(self) -> Dict[str, Any]:
+        """perf.csv 的附加列：帧数 + 内存/显存采样（监控失败不能拖垮主循环）。"""
+        extra: Dict[str, Any] = {"frames": self._frames}
+        try:
+            from monitor import sample
+            extra.update(sample())
+        except Exception:  # noqa: BLE001
+            pass
+        return extra
 
 
 # -----------------------------------------------------------------------------
