@@ -1390,23 +1390,50 @@ class CalibApp(tk.Tk):
         names = [f"{d['name']}  ({d['pairs']} 对)" for d in items]
         self.cmb_dir.configure(values=names)
         self._dirs = items
-        if names and not self.var_dir.get():
-            self.var_dir.set(items[0]["dir"])
+        if not names:
+            return
+        # 记忆里存的可能是绝对路径、相对路径或下拉框标签；统一判定一次有效性。
+        # 无效就落到最新一个 —— 否则下拉框显示的是个已经不存在的路径，
+        # 而状态栏一直提示"请先在第①页选一个采集目录"，用户不知道该点哪。
+        cur = self._match_dir(self.var_dir.get().strip())
+        if not cur:
+            self.var_dir.set(names[0])
+            return
+        # 能对上列表里的目录时，把显示文本换回标签，避免框里露出一串路径
+        for i, d in enumerate(items):
+            if os.path.normcase(d["dir"]) == os.path.normcase(cur):
+                if self.var_dir.get().strip() != names[i]:
+                    self.var_dir.set(names[i])
+                break
 
     def _browse_dir(self) -> None:
         p = filedialog.askdirectory(initialdir=core.CAPTURE_ROOT)
         if p:
             self.var_dir.set(p)
 
-    def _current_frames_dir(self) -> str:
-        t = self.var_dir.get().strip()
-        if os.path.isdir(t):
-            return t
-        # 下拉框里显示的是 "名字 (n 对)"，取回真实路径
+    def _match_dir(self, text: str) -> str:
+        """把界面上的目录文本解析成真实存在的绝对路径；解析不出返回 ""。
+
+        界面上的文本有三种来源，都要认：
+          1) 下拉框选中的标签 "20261013_151253  (26 对)"
+          2) 浏览进来的绝对路径
+          3) 记忆里存的历史路径（可能是相对项目根的路径 —— 从别的目录启动时，
+             直接 os.path.isdir 会失败，必须按项目根再试一次）
+        """
+        t = str(text or "").strip()
+        if not t:
+            return ""
+        for cand in (t, os.path.join(PROJECT_ROOT, t)):
+            if os.path.isdir(cand):
+                return os.path.abspath(cand)
+        base = os.path.basename(os.path.normpath(t))
         for d in getattr(self, "_dirs", []):
-            if t.startswith(d["name"]):
+            if t.startswith(d["name"]) or base == d["name"]:
                 return d["dir"]
         return ""
+
+    def _current_frames_dir(self) -> str:
+        return self._match_dir(self.var_dir.get())
 
     # ------------------------------------------------------------------ 标定
     def _start_calibration(self) -> None:
@@ -1572,6 +1599,15 @@ class CalibApp(tk.Tk):
                           "image_size": tuple(calib.image_size), "post_rows": []}
         self.btn_check.configure(state="normal")
         self._log(self.txt_chk, f"已载入 {path}\n{calib.summary()}")
+        # 第②页也要回填：原先只有"在本页算完"才写结果面板，于是"载入已有标定"之后
+        # ②页的「标定结果与体检」一片空白，用户会误以为没载入成功（数据只在③页出现）
+        self._set_text(self.txt_cal_log, f"载入已有标定：{path}")
+        self._log(self.txt_cal_log, calib.summary())
+        self._set_text(self.txt_cal_res,
+                       core.validate_text(core.validate(calib, tuple(calib.image_size), [])))
+        # 检查图需要一对真实原图；没选目录时自动落到最新那个，别让"载入了却画不出来"
+        if not self._current_frames_dir():
+            self._refresh_dirs()
         self._update_check_hint()
         self.var_status.set("已载入标定文件，正在生成检查图…")
         self._start_check()
@@ -1612,7 +1648,8 @@ class CalibApp(tk.Tk):
                 "左右差值": "diff", "棋盘混合": "checker", "覆盖热力图": "coverage",
                 "分区 |dy| 热力图": "region"}.get(key, "stack")
         img = self.check_out["images"].get(pick)
-        if img is not None and cv2.imwrite(p, img):
+        from depth_utils import imwrite_image
+        if img is not None and imwrite_image(p, img):
             self.var_status.set(f"已保存 {p}")
 
     # ------------------------------------------------------------------ 保存
@@ -1733,7 +1770,9 @@ class CalibApp(tk.Tk):
         state = {
             "geometry": geo,
             "tab": int(self.nb.index(self.nb.select())),
-            "dir": str(self._safe(self.var_dir, "") or ""),
+            # 存解析后的绝对路径：存相对路径会在"换工作目录启动"时失效，
+            # 表现为下拉框里是个不存在的路径、状态栏一直要求选目录
+            "dir": self._current_frames_dir() or str(self._safe(self.var_dir, "") or ""),
             "thresholds": {
                 "px": self._safe(self.var_px, 8.0),
                 "sharp": self._safe(self.var_sharp, 100.0),
