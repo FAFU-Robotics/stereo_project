@@ -612,13 +612,18 @@ class CalibApp(tk.Tk):
 
         imgs = tk.Frame(top, background=theme.BG)
         imgs.pack(side="left", fill="both", expand=True)
+        # 两列必须等宽：用 grid + uniform，而不是两个 pack(expand=True)。
+        # pack 只按"剩余空间"均分，一旦两侧请求尺寸不同（图片大小不同就会）就会一大一小。
+        imgs.columnconfigure(0, weight=1, uniform="imgpair")
+        imgs.columnconfigure(1, weight=1, uniform="imgpair")
+        imgs.rowconfigure(0, weight=1)
         # 图像标签必须是 tk.Label：ttk.Label 不接受 background，
         # 深色底下会露出一块系统灰底，画面边界就糊了
         box_l, self.lbl_left = theme.image_panel(imgs, "左眼 · 角点与判定叠加",
                                               "LEFT（相机未打开）")
-        box_l.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        box_l.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         box_r, self.lbl_right = theme.image_panel(imgs, "右眼 · 角点与判定叠加", "RIGHT")
-        box_r.pack(side="left", fill="both", expand=True, padx=(4, 0))
+        box_r.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
 
         # 三张卡片用 grid 排在 holder 里：pack 在空间不足时会把最后放的那张整个裁掉，
         # 而质量门恰恰是最需要常驻可见的一块（它是"现在能不能存"的唯一依据）

@@ -296,6 +296,12 @@ def image_panel(parent: tk.Misc, title: str, text: str) -> Tuple[tk.Frame, tk.La
     lbl = tk.Label(frame, text=text, anchor="center", background=IMG_BG,
                    foreground=MUTED, bd=0, highlightthickness=0)
     lbl.pack(fill="both", expand=True)
+    # 关键：切断"图片尺寸 → 面板请求尺寸"的传播。
+    # tk.Label 的请求尺寸等于它显示的图片尺寸。图片一旦按面板放大，面板请求尺寸也跟着
+    # 变大，pack/grid 又按新请求重新分配空间 —— 于是左面板越撑越宽、右面板被挤扁，
+    # 而且窗口缩小时左面板不肯缩回去（实测窗口缩到 1100 时 639 vs 39）。
+    # 关掉传播后，图片只影响绘制，不再参与布局计算。
+    frame.pack_propagate(False)
     return outer, lbl
 
 
