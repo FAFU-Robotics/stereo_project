@@ -109,11 +109,15 @@ def _make_photo(bgr: np.ndarray):
 class CameraWorker(threading.Thread):
     """独占相机，循环"读取 → 分析"；只把**最新一帧**交给界面，从不排队。"""
 
-    def __init__(self, cam_cfg: Dict[str, Any], spec: Any, thr: Dict[str, float]) -> None:
+    def __init__(self, cam_cfg: Dict[str, Any], spec: Any, thr: Dict[str, float],
+                 preview_fps: float = 8.0, cv_threads: int = 1) -> None:
         super().__init__(daemon=True, name="calib-camera")
         self.cfg = cam_cfg
         self.spec = spec
         self.thr = dict(thr)
+        # 预览分析帧率上限与 OpenCV 线程数：见 run() 里为什么必须限制
+        self.preview_fps = float(preview_fps or 0.0)
+        self.cv_threads = int(cv_threads or 1)
         self.error = ""
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -136,31 +140,54 @@ class CameraWorker(threading.Thread):
         self.cam = cam
         cc = core._cc()
         stamps: deque = deque(maxlen=15)
-        while not self._stop.is_set():
-            try:
-                pair = cam.read()
-            except Exception as exc:        # noqa: BLE001
-                self.error = f"读取失败：{type(exc).__name__}: {exc}"
-                break
-            try:
-                res = cc.analyze_pair(pair.left, pair.right, self.spec, strict=True)
-                pose = cc.classify_pose(res, pair.left.shape[:2], self.spec)
-                reasons = [m[0] for m in cc.gate_messages(res, self.thr)]
-            except Exception as exc:        # noqa: BLE001
-                self.error = f"分析失败：{type(exc).__name__}: {exc}"
-                break
-            now = time.perf_counter()
-            stamps.append(now)
-            fps = 0.0
-            if len(stamps) > 1 and stamps[-1] > stamps[0]:
-                fps = (len(stamps) - 1) / (stamps[-1] - stamps[0])
-            with self._lock:
-                self._payload = (pair, res, pose, reasons, fps)
-                self._seq += 1
+        # 并发控制：OpenCV 默认按核数开线程池（本机 24 个）。实测 analyze_pair 用
+        # 1 线程与 24 线程的**耗时相同**（107.8 vs 108.1 ms），但 24 线程要多烧
+        # 约 0.5 个核（CPU 152% → 97%）。多出来的线程只是在空转抢核，会把整机拖卡。
+        prev_threads = cv2.getNumThreads()
         try:
-            cam.close()
+            cv2.setNumThreads(max(int(self.cv_threads), 1))
         except Exception:                   # noqa: BLE001
-            pass
+            prev_threads = 0
+        interval = (1.0 / self.preview_fps) if self.preview_fps > 0 else 0.0
+        next_t = 0.0
+        try:
+            while not self._stop.is_set():
+                if interval > 0:            # 限速：相机按需读，不必空转解码
+                    now = time.perf_counter()
+                    if now < next_t:
+                        time.sleep(min(next_t - now, 0.02))
+                        continue
+                    next_t = now + interval
+                try:
+                    pair = cam.read()
+                except Exception as exc:    # noqa: BLE001
+                    self.error = f"读取失败：{type(exc).__name__}: {exc}"
+                    break
+                try:
+                    res = cc.analyze_pair(pair.left, pair.right, self.spec, strict=True)
+                    pose = cc.classify_pose(res, pair.left.shape[:2], self.spec)
+                    reasons = [m[0] for m in cc.gate_messages(res, self.thr)]
+                except Exception as exc:    # noqa: BLE001
+                    self.error = f"分析失败：{type(exc).__name__}: {exc}"
+                    break
+                now = time.perf_counter()
+                stamps.append(now)
+                fps = 0.0
+                if len(stamps) > 1 and stamps[-1] > stamps[0]:
+                    fps = (len(stamps) - 1) / (stamps[-1] - stamps[0])
+                with self._lock:
+                    self._payload = (pair, res, pose, reasons, fps)
+                    self._seq += 1
+        finally:
+            if prev_threads:
+                try:
+                    cv2.setNumThreads(prev_threads)
+                except Exception:           # noqa: BLE001
+                    pass
+            try:
+                cam.close()
+            except Exception:               # noqa: BLE001
+                pass
 
     # ---------------------------------------------------------------- 取数据
     def take(self):
@@ -1092,6 +1119,27 @@ class CalibApp(tk.Tk):
         except Exception:                   # noqa: BLE001
             return {}
 
+    def _gui_perf(self) -> Dict[str, float]:
+        """读 config.yaml 的 gui 段（预览帧率上限、OpenCV 线程数）。
+
+        单独一个函数而不是并进 _cam_cfg()：相机配置会原样交给 StereoCamera，
+        多塞键会被当成未知字段；这两个参数只与界面负载有关。
+        读不到就用默认值，绝不让配置问题阻断"打开相机"。
+        """
+        out: Dict[str, float] = {"preview_fps": 8.0, "cv_threads": 1}
+        try:
+            import yaml
+            with open(_find("config.yaml"), "r", encoding="utf-8") as fh:
+                cfg = yaml.safe_load(fh) or {}
+            g = dict(cfg.get("gui", {}) or {})
+            if "preview_fps" in g:
+                out["preview_fps"] = float(g.get("preview_fps") or 0)
+            if "cv_threads" in g:
+                out["cv_threads"] = max(int(g.get("cv_threads") or 1), 1)
+        except Exception:                   # noqa: BLE001
+            pass
+        return out
+
     def _toggle_camera(self) -> None:
         if self.worker is not None:
             self.worker.stop()
@@ -1106,7 +1154,10 @@ class CalibApp(tk.Tk):
                "min_contrast": self.var_contrast.get()}
         if self.session is None:
             self.session = core.CaptureSession(self.spec, target=self.var_target.get(), thr=thr)
-        self.worker = CameraWorker(self._cam_cfg(), self.spec, thr)
+        perf = self._gui_perf()
+        self.worker = CameraWorker(self._cam_cfg(), self.spec, thr,
+                                   preview_fps=perf["preview_fps"],
+                                   cv_threads=int(perf["cv_threads"]))
         self.worker.start()
         self.btn_open.configure(text="关闭相机")
         self.var_ready.set("相机正在打开…（首次打开约需 2~5 秒）")
