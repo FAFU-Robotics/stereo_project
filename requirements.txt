@@ -1,47 +1,67 @@
 # =============================================================================
 #  stereo_project 依赖清单
 #  ---------------------------------------------------------------------------
-#  【本机现状】下面这些包**已经全部装好**在 D:\31931\Documents\python312 里，
-#  本阶段不需要再安装任何东西。此文件的作用是"记录并复现环境"。
+#  【2026-10-27 实测复核】本机实际环境：
+#      Python 3.14.6  C:\Users\never\AppData\Local\Python\pythoncore-3.14-64
+#      torch 2.9.1+cu128   torchvision 0.24.1+cu128   open3d 0.20.0
+#      RTX 5060 Laptop（sm_120，驱动 591.74）→ CUDA 可用，fp16 matmul/conv2d 实跑通过
 #
-#  【重要】PyTorch 必须用 cu128（CUDA 12.8）版本，原因：
-#      RTX 5060 Laptop 是 Blackwell 架构，计算能力 **sm_120**。
-#      官方 FFS readme 推荐的 torch==2.6.0+cu124 预编译内核只到 sm_90，
-#      **不含 sm_120**，装了也无法在这块卡上正确执行。
-#      本机实测可用组合（已通过真实矩阵乘法/卷积验证）：
-#          Python 3.12.10 + torch 2.8.0+cu128 + torchvision 0.23.0+cu128
-#
-#  【重要】xformers 不装。官方安装命令里有它，但通读 FFS 源码后确认
-#      代码中没有任何 `import xformers`，装了只是给 Windows 增加编译失败风险。
-#
-#  【重要】Triton 不装（Windows 官方 PyTorch 不带）。FFS 的 triton 代价体
-#      内核和 torch.compile 都需要它，因此本机运行时必须设置 TORCHDYNAMO_DISABLE=1，
-#      并把 ffs.build_volume 设为 pytorch1（纯 PyTorch 路径）。
+#  这份文件的作用是"记录并复现环境"，不是自动安装脚本。
 # =============================================================================
 
 # ---- 深度学习框架（必须 cu128 源；不要用默认 PyPI 的 CPU 版）----
-# 安装命令（供换机复现时使用，本机已装好，无需执行）：
-#   pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-torch==2.8.0
-torchvision==0.23.0
+#  安装命令（换机复现时照抄）：
+#    pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cu128
+#
+#  为什么是 2.9.1 而不是 2.8.0：
+#    RTX 5060 是 Blackwell **sm_120**，cu124 及更早的预编译内核里没有它，必须 cu128+。
+#    而 cu128 索引里 2.8.0 只提供 cp39~cp313，**没有 cp314**；
+#    Python 3.14 在 cu128 线上只有 2.9.0 / 2.9.1 带 cp314 wheel。
+#
+#  ⚠️ Python 3.14 专属问题（已在 stereo_depth.py 内解决，不要删那段代码）：
+#     torch 2.9.1 的 torch.compile() 在 sys.version_info >= (3,14) 时直接
+#     raise RuntimeError("torch.compile is not supported on Python 3.14+")。
+#     FFS 的 core/submodule.py:376 是 @torch.compile —— 装饰器在 import 阶段求值，
+#     不处理就会让 `import core.foundation_stereo` 直接失败。
+#     → stereo_depth.py 在 import torch 后把 torch.compile 换成恒等装饰器（语义等价）。
+# =============================================================================
+torch==2.9.1
+torchvision==0.24.1
 
-# ---- Fast-FoundationStereo 官方 requirements.txt 内容（全部已装）----
+# ---- Fast-FoundationStereo 主链路真正用到的（已按需核实）----
+#   timm       core/extractor.py:7   import timm
+#   imageio    Utils.py:1            import imageio
+#   omegaconf  **权重文件里内嵌了 DictConfig**，torch.load 反序列化时需要它；
+#              代码里并不 import，所以极易被漏掉 —— 缺了会报
+#              ModuleNotFoundError: No module named 'omegaconf'
+#   einops     timm 的常用依赖，一并装上
+#   pillow     torchvision 依赖，同时是标定 GUI 的首选显示通道
 timm
-einops
-omegaconf
-scipy
-numpy
-scikit-image
-opencv-contrib-python
 imageio
+omegaconf
+einops
+pillow
+
+# ---- 基础 ----
+numpy
+opencv-contrib-python
 pyyaml
-open3d
 
-# ---- 本项目额外需要 ----
-# huggingface_hub：仅当选择从 HuggingFace 下载权重时需要
-huggingface_hub
+# ---- 3D 点云窗口（--mode pointcloud / view3d）----
+#  ⚠️ 实测（2026-10-27）：`import open3d` 顶层会加载 open3d.visualization.draw_plotly，
+#     因此**必须**同时有 plotly 与 dash，否则依次报：
+#         ModuleNotFoundError: No module named 'plotly'
+#         ModuleNotFoundError: No module named 'dash'
+#     cp314 的 wheel 只有 open3d 0.20.0 提供（0.19.0 最高 cp312）。
+#     Python 3.14 上装它请直接用镜像 wheel，PyPI 直连实测 20 分钟下不完 75.7 MB。
+open3d==0.20.0
+plotly
+dash
 
-# ---- 明确不使用（保留说明，避免以后有人误装）----
-# xformers   : FFS 源码未 import，不需要
-# triton     : Windows 无官方包；若日后要提速，需先评估社区版 triton-windows
+# ---- 明确不使用 / 未安装（保留说明，避免以后有人误装）----
+# xformers   : FFS 源码未 import，装了只是给 Windows 增加编译失败风险
+# triton     : Windows 无官方包；且 torch.compile 在 Py3.14 上本来就不可用
 # tensorrt   : 阶段 7 可选（官方有 ONNX/TRT 脚本）；启用前需单独评估驱动/版本匹配
+# turbojpeg  : 只被 core/utils/frame_utils.py 引用，主链路不 import
+# scipy / scikit-image : 官方 requirements 列了，但本项目代码路径 0 处引用（已 grep 核实）
+# huggingface_hub : 仅在需要重新下载权重时用；权重已在 weights/ 目录就位

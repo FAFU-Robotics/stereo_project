@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stereo-depth-sdk"
+# 版本号只有一个来源：stereo_sdk/types.py 的 SDK_VERSION。
+# 这里用 dynamic 从它读，避免"包元数据 0.3.0、运行时 SDK_VERSION 0.1.0"这种两处不一致。
+dynamic = ["version"]
+description = "DECXIN-3412V1 双目深度相机 Python SDK：采集 / 校正 / 推理 / 点云 / 标定信息"
+readme = "README_SDK.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "stereo_project" }]
+keywords = ["stereo", "depth", "camera", "pointcloud", "calibration", "opencv"]
+
+# 只列 SDK 自身必需的运行时依赖。
+# torch / FoundationStereo 权重不在其中：它们体积大、且只有真正 start() 时才需要，
+# 由 README 的安装章节单独说明。这样 `pip install` 能快速完成，
+# 只想读标定信息或跑 MockSession 的人不必先装 2 GB 的 torch。
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# 写 32 位 TIFF 深度图才需要
+tiff = ["imagecodecs>=2023.1"]
+# 完整推理链路（按你的 CUDA 版本自选安装方式，见 README）
+gpu = ["torch>=2.1"]
+
+# 命令行入口。同一个函数既能起标定 GUI，也能进实时链路：
+#     stereo-app                  → 标定 GUI（不需要 torch）
+#     stereo-app --mode depth     → 实时深度（需要 torch + 权重）
+#     stereo-app --where          → 打印路径解析（排错第一条命令）
+#     stereo-app --selftest       → 环境自检
+[project.scripts]
+stereo-app = "app_entry:cli_main"
+
+[project.urls]
+Documentation = "https://github.com/your-org/stereo-project#readme"
+
+# ---------------------------------------------------------------- 打包内容
+# 说明：这不是一个"纯 SDK 包"。Session 依赖仓库根目录下的这几个模块
+# （camera.py / pipeline_threaded.py / calibration.py …），所以它们必须一起被安装，
+# 否则 pip install 之后 import Session 会 ModuleNotFoundError。
+# 用 py-modules 把根目录的模块平铺进 site-packages，与仓库内的 sys.path 行为一致。
+[tool.setuptools]
+py-modules = [
+    "calibration",
+    "camera",
+    "depth_utils",
+    "pipeline_threaded",
+    "pointcloud",
+    "profiler",
+    "runtime",
+    "stereo_depth",
+    "viewer",
+    # 路径解析与统一入口：Session / main / GUI 都依赖 app_paths，
+    # 漏了它 pip 安装后 import 会直接 ModuleNotFoundError
+    "app_paths",
+    "app_entry",
+]
+
+[tool.setuptools.packages.find]
+include = ["stereo_sdk*"]
+exclude = ["tools*", "tests*", "docs*", "output*", "calibration_data*"]
+
+# 版本号的唯一来源：从 stereo_sdk/types.py 的 SDK_VERSION 读取，
+# 与上面 [project] 的 dynamic = ["version"] 配套。
+# setuptools 会先做静态 AST 解析，不必 import 整个包（也就不会要求构建环境里有 numpy）。
+[tool.setuptools.dynamic]
+version = { attr = "stereo_sdk.types.SDK_VERSION" }
+
+[tool.setuptools.package-data]
+stereo_sdk = ["py.typed"]

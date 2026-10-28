@@ -1,47 +1,50 @@
 # stereo_project —— 双目立体视觉系统（DECXIN-3412V1 + Fast-FoundationStereo）
 
-> **当前进度：阶段 0 / 1 / 2 已完成；下一步是阶段 3（实时视差）。**
-> 深度/点云在未标定阶段产生的一切结果，都只用于流程验证，**不得用于测量**。
+> **当前进度：阶段 0–7 已跑通**（采集 / 校正 / 推理 / 点云 / 标定 / 精度验证 / 性能），
+> 标定 GUI 与 Python SDK 已就位；**打包成 EXE 尚未开始**，清单见
+> [docs/打包成EXE_准备清单.md](docs/打包成EXE_准备清单.md)。
 
 ## ⚡ 最快的运行方式（双击即可，**不需要管理员权限**）
 
+在本项目目录里双击：
+
 ```
-D:\31931\Documents\stereo_project\tools\启动_普通权限.bat
+tools\启动_普通权限.bat
 ```
 
 双击 → 不弹 UAC → 菜单选 `1` 进入**实时双目预览**。
+（早期文档里写死过 `D:\31931\...` 这类作者机器路径，已删；一律从项目根目录找 `tools\`。）
 
 > **2026-10-21 复核结论**：普通用户权限（Medium 完整性）下，索引 1 + `CAP_DSHOW`
 > 能稳定打开 1280×480 双目画面（左右各 640×480），实测 30 帧 0 失败、0 黑屏、正常释放。
 > **不需要管理员权限**。旧文档里"必须提权"的说法已经过时，原因见
-> [docs/docs/README.md](docs/docs/README.md)。
+> [docs/README.md](docs/README.md)。
 >
 > ⚠️ 只有在"低完整性 / 沙箱 / 受限会话"里运行时，Windows 才会拒绝物理相机
 > （`E_ACCESSDENIED`）。`tools\启动_管理员.bat` 仅保留作受限环境的诊断入口。
 >
-> **2026-10-22 最终修复**：根因是 `D:\31931\Documents\python312\python.exe` 的
-> **文件完整性标签为 Low**（继承自 DSH 工作区）。执行：
-> ```powershell
-> icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
-> ```
-> 后普通 PowerShell 即可正常打开相机；详见
-> [docs/docs/README.md](docs/docs/README.md) 第 0 节。
+> **2026-10-22 记录（历史，针对当时的 Python 3.12 解释器）**：根因是解释器文件的
+> **文件完整性标签为 Low**（继承自当时的 DSH 工作区）；执行
+> `icacls "<解释器路径>" /setintegritylevel Medium` 后普通 PowerShell 即可打开相机。
+> 当前机器换成了 Python 3.14 独立安装，普通权限实测可直接打开相机，无需该处理。
 
-## 1. 环境（本机实测，见 [docs/docs/README.md](docs/docs/README.md)）
+## 1. 环境（本机实测，见 [docs/README.md](docs/README.md)）
 
 | 项目 | 值 |
 |---|---|
-| 操作系统 | Windows 11 25H2（Build 26200.9457） |
+| 操作系统 | Windows 11 |
 | GPU | NVIDIA GeForce RTX 5060 Laptop GPU，8 GB，计算能力 **sm_120** |
-| 驱动 | 610.88（CUDA UMD 13.3） |
-| Python | **3.12.10** @ `D:\31931\Documents\python312\python.exe`（独立安装，**没有** conda/Miniforge） |
-| PyTorch | **2.8.0+cu128**（实测 CUDA 可用、含 sm_120 内核） |
-| OpenCV | opencv-contrib-python 5.0.0.93（DirectShow / Media Foundation 均可用） |
-| Open3D | 0.20.0 |
-| 相机 | **DECXIN（索引 1）**：1280×480 左右拼接（每只眼 640×480），普通权限实测 **~59 FPS 采集** |
+| Python | **3.14.6** @ `C:\Users\never\AppData\Local\Python\pythoncore-3.14-64\python.exe`（独立安装，**没有** conda/Miniforge） |
+| PyTorch | **2.9.1+cu128**（`torch.cuda.get_arch_list()` 含 sm_120，fp16 matmul/conv2d 实跑通过） |
+| torchvision | 0.24.1+cu128 |
+| OpenCV | opencv-contrib-python 5.0.0（DirectShow / Media Foundation 均可用） |
+| Open3D | 0.20.0（`--mode pointcloud` 的 3D 窗口；`import open3d` 还要求 plotly + dash） |
+| 相机 | **DECXIN（索引 1）**：1280×480 左右拼接（每只眼 640×480），实测采集 57–59 FPS |
 
-> ⚠️ 系统 PATH 里的默认 `python` 是 **3.14.7**（`C:\Python314`），**不能**用。
-> ⚠️ RTX 5060 是 sm_120，官方 readme 推荐的 `torch==2.6.0+cu124` **不含 sm_120 内核**，不能用。
+> ⚠️ 系统 PATH 里的 `python` 是 WorkBuddy 自带的 **3.13.14**，**没有** torch/open3d，
+> 直接用 `python main.py` 会加载失败。请用上表里的 3.14 全路径，或双击 `tools\*.bat`（已做解释器探测）。
+> ⚠️ RTX 5060 是 sm_120，`torch==2.6.0+cu124` 这类旧轮子**不含 sm_120 内核**，不能用；
+> 且 Python 3.14 只有 cu128 线的 2.9.0/2.9.1 提供 cp314 wheel。
 
 ### 运行前必设的环境变量（启动器已自动设置）
 
@@ -49,8 +52,8 @@ D:\31931\Documents\stereo_project\tools\启动_普通权限.bat
 set TORCHDYNAMO_DISABLE=1
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
-set TEMP=D:\31931\Documents\stereo_project\_work\pip_tmp
-set TMP=D:\31931\Documents\stereo_project\_work\pip_tmp
+set TEMP=%CD%\_work\pip_tmp
+set TMP=%CD%\_work\pip_tmp
 ```
 
 `TORCHDYNAMO_DISABLE=1` 的原因：Windows 版 PyTorch 不带 Triton，
@@ -103,11 +106,14 @@ bench_presets.py             三档预设的真实深度误差（已知距离，
 > ✅ **普通 PowerShell / 普通 cmd 即可**，不需要管理员权限。
 > 双击 `tools\启动_普通权限.bat` 最省事；也可以在普通终端里直接执行下面的命令。
 > 只有在低完整性/沙箱会话里被拒绝时，才需要用 `tools\启动_管理员.bat` 做对照诊断。
+>
+> 📌 下文命令里的 `python` 指**第 1 节表格里那个 3.14 解释器**。如果 `where python`
+> 不是它，请写全路径（或直接双击 `tools\*.bat`，那些 bat 已内置解释器探测）。
 
 ### 阶段 1 / 3：相机预览与实时视差（普通权限）
 
 ```bat
-cd /d D:\31931\Documents\stereo_project
+cd /d <项目根目录>
 
 REM ★ 最省事：双击 tools\启动_普通权限.bat，然后按菜单选
 REM     [1] 实时双目预览        [2] 实时视差(FFS)     [3] 实时点云
@@ -154,6 +160,72 @@ python tests\test_pipeline_offline.py --frames 25
 专门用来抓"某个模式里变量忘了初始化"这类只在特定场景（例如画面模糊）才暴露的崩溃。
 > 为什么要有它：曾经因为 `run_pointcloud` 里漏初始化一个变量，导致画面模糊时崩溃退出
 > （清晰时被 Python 的 `and` 短路掩盖），用户实测表现为"实时演示有时会突然停下"。
+
+### 标定 GUI（图形界面：采集 → 标定 → 检查 → 保存）
+
+换标定不用敲命令，双击或直接运行：
+
+```bat
+tools\calib_gui.bat
+python tools\calib_gui.py
+```
+
+| 页 | 做什么 | 产出 |
+|---|---|---|
+| ① 采集 | 开相机、实时预览、按空格抓一对图；缩略图可翻看/删除 | `output\calib\<时间戳>\left\*.png` + `right\*.png` |
+| ② 标定 | 选板型与参数，跑 `stereoCalibrate`，显示重投影 RMS 与每帧误差 | 内存中的标定结果 |
+| ③ 检查校正效果 | 去畸变 + 极线行对齐预览，左右/闪烁对比 | 仅预览，不写文件 |
+| ④ 保存参数 | 写入 `calibration\stereo_calib.yaml`（旧文件自动备份） | yaml |
+
+快捷键：`空格` 保存当前帧　`F` 强制保存（不满足质量门也存）　`U` 撤销上一张。
+焦点在输入框时快捷键自动失效，不会误触发。
+
+保存后**不需要重启程序**：下一节 SDK 的 `reload_calibration()` 会在下一帧生效。
+操作细节与判读标准见 [docs/标定GUI使用说明.md](docs/标定GUI使用说明.md)。
+
+### 在别的程序里取深度图与点云（Python SDK）
+
+`stereo_sdk` 是独立的接口层，不依赖 GUI。想当包用就先装一次（可选）：
+
+```bat
+python -m pip install -e .
+```
+
+最小示例（与 `examples\01_read_depth.py` 同逻辑）：
+
+```python
+from stereo_sdk import Session
+
+with Session("config.yaml") as cam:        # __enter__ 里 start()，3~10 秒
+    while True:
+        if not cam.has_new_result():
+            continue                        # 没有新帧就跳过
+        r = cam.take_result()               # 永不阻塞，取最新一帧
+        print(r.depth[240, 320])            # 画面中心深度（米）
+        pts, cols = r.points, r.colors      # (N,3) 米 / (N,3) BGR
+```
+
+数据约定（按这个理解，否则数值会错 1000 倍或上下颠倒）：
+
+| 项 | 约定 |
+|---|---|
+| 单位 | 米（`depth` 与 `points` 都是） |
+| 坐标系 | 相机光学系：x 右、y **下**、z 前 |
+| 颜色 | **BGR**，与 OpenCV 一致 |
+| `take_result()` | 永不阻塞，始终返回最新结果，**可能是重复帧**；要逐帧处理必须先用 `has_new_result()` |
+| `depth` 尺寸 | 与 `r.frame.left` 相同（已上采样到全分辨率） |
+| 无效像素 | `depth = 0`、`valid = False`，且不进入 `points` |
+
+导出成文件（二进制 PLY 比 ASCII 小约 60%）：
+
+```python
+from stereo_sdk import export
+paths = export.export_result(r, "out", prefix="scan01")
+# left/right png、disparity npy + 16bit png、depth npy + 16bit png(毫米)、valid png、cloud.ply
+```
+
+字段与接口全集见 [README_SDK.md](README_SDK.md)、[docs/接口约定_SDK.md](docs/接口约定_SDK.md)；
+可直接运行的例子在 `examples\`：01 读深度 / 02 存点云 / 03 实时预览 / 04 标定报告。
 
 ### 阶段 5：标定（步骤 0 预检 ✅ 已完成 / 步骤 1 采集 ⏳ 待执行）
 
@@ -214,7 +286,7 @@ REM          tools\相机OpenCV自检.bat --quick（普通权限快速全扫）
 ### 阶段 2：FFS 官方示例验证（不需要相机）
 
 ```bat
-cd /d D:\31931\Documents\stereo_project
+cd /d <项目根目录>
 set TORCHDYNAMO_DISABLE=1
 
 REM ① 下载官方研究版权重（约 100 MB 级；也可用浏览器手动下载）
@@ -257,6 +329,12 @@ bench_pipeline.py            分阶段耗时基准（校正/推理/点云/显示
 
 ## 5. 相机权限问题的最终结论（2026-10-22：`python.exe` 的 Low 文件标签）
 
+> 本节保留当时的原始记录，**其中的 `D:\31931\...python312` 路径属于那台机器**；
+> 在自己机器上套用时，把路径换成实际使用的解释器（用 `where python` 或 `python app_entry.py --where` 查）。
+
+> 本节保留当时的原始记录，**其中的 `D://31931//...python312` 路径属于那台机器**；
+> 在自己机器上套用时，把路径换成你实际使用的解释器（用 `where python` 或 `app_entry.py --where` 查）。
+
 **最终修复（2026-10-22）**：`icacls` 显示 `D:\31931\Documents\python312\python.exe`
 的标签是 `Mandatory Label\Low Mandatory Level:(I)(NW)`（从 DSH 工作区继承）。
 Low 进程访问物理相机时，在 DirectShow `BindToObject` 阶段被 `E_ACCESSDENIED` 拒绝。
@@ -267,13 +345,12 @@ icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
 ```
 
 后，普通 PowerShell 里 Python 令牌变为 `S-1-16-8192`（Medium），索引 1 可正常输出
-1280×480；**不需要管理员**。完整步骤与注意事项见
-[docs/docs/README.md](docs/docs/README.md) 第 0 节。
+1280×480；**不需要管理员**。（原取证文档已不在库中，结论保留在本节。）
 
 **旧结论（2026-09-30，已过时）**：普通权限进程打开物理相机 → `HRESULT 0x80070005 (E_ACCESSDENIED)`，
 当时用管理员权限绕过。
 
-**2026-10-21 复核**（完整证据见 [docs/docs/README.md](docs/docs/README.md)）：
+**2026-10-21 复核**：
 
 | 进程令牌 / 场景 | DirectShow `BindToObject` | 项目 `main.py` 实际采集 |
 |---|---|---|
@@ -294,8 +371,7 @@ icacls "D:\31931\Documents\python312\python.exe" /setintegritylevel Medium
    若又是 `Low`，重新执行 `icacls ... /setintegritylevel Medium`。
    重装/升级 Python 或 DSH 重新给工作区打标签后，标签可能恢复成 Low。
 
-> 历史取证（2026-09-30）仍保留在 [docs/docs/docs/README.md](docs/docs/docs/README.md)，
-> 其中第 12 节的"必须管理员"已被本次复核取代。
+> 历史取证（2026-09-30）的原始文档已不在库中；其中的"必须管理员"已被本次复核取代。
 
 ## 6. 已知限制
 

@@ -30,7 +30,27 @@ from .types import (HOT_PARAMS, RESTART_PARAMS, SDK_VERSION, DepthResult, FrameP
 from profiler import Profiler  # 统一阶段耗时统计（任务1）
 from .recorder import Recorder
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ---- 路径解析（源码运行 = 项目根；打包成 EXE 后 = exe 所在目录）----
+# 原来用 dirname(dirname(__file__))：pip 安装后指向 site-packages、打包后指向 _MEIPASS，
+# 两种情况下 config / 权重 / 输出目录都会找错地方。统一交给 app_paths（见其文件头）。
+try:
+    from app_paths import data_root as _data_root, data as _data_path, resource as _resource
+except ImportError:                    # app_paths 缺失时的兜底（行为与改造前一致）
+    _ROOT_FALLBACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _data_root() -> str:
+        return _ROOT_FALLBACK
+
+    def _data_path(rel: str) -> str:
+        return os.path.normpath(os.path.join(_ROOT_FALLBACK, rel))
+
+    def _resource(rel: str) -> str:
+        return os.path.normpath(os.path.join(_ROOT_FALLBACK, rel))
+
+PROJECT_ROOT = _data_root()
+
+#: config.yaml 的 project 段里，哪些是"程序要写"的（必须落在可写根），哪些是"只读资源"
+_WRITABLE_PROJECT_KEYS = ("output_dir", "calibration_dir")
 
 #: 预设 → (scale, valid_iters)。数值来自 tools/bench_presets.py 的实测（速度/精度）
 PRESETS: Dict[str, tuple] = {"precise": (1.0, 8), "balanced": (0.75, 8), "fast": (0.5, 4)}
@@ -53,11 +73,23 @@ def _next_lower(scale: float):
 
 
 def _resolve_paths(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """把 config 里的相对路径改成绝对路径（与 tools/bench_* 的约定一致）。"""
+    """把 config 里的相对路径改成绝对路径（与 tools/bench_* 的约定一致）。
+
+    只读资源（ffs_repo / weights_dir）走 resource()：打包后在 _MEIPASS 里也能找到；
+    可写数据（output_dir / calibration_dir）走 data()：永远落在 exe 旁边，
+    绝不会写进"退出即删"的临时目录。
+    """
     project_cfg = dict(cfg.get("project", {}) or {})
     for key in ("ffs_repo", "output_dir", "weights_dir", "calibration_dir"):
-        if key in project_cfg:
-            project_cfg[key] = os.path.normpath(os.path.join(PROJECT_ROOT, project_cfg[key]))
+        if key not in project_cfg:
+            continue
+        rel = str(project_cfg[key])
+        if os.path.isabs(rel):
+            project_cfg[key] = os.path.normpath(rel)
+        elif key in _WRITABLE_PROJECT_KEYS:
+            project_cfg[key] = _data_path(rel)
+        else:
+            project_cfg[key] = _resource(rel)
     return project_cfg
 
 
@@ -119,76 +151,159 @@ class Session:
         self._params = None
         # 稳定性加固②: 先抢单实例锁（防两个进程抢同一台相机导致"时好时坏"），
         # 再带重试打开相机（占用类失败会 5 次 x 300ms 退避并给出可读排查步骤）。
-        from camera_guard import acquire_camera_lock, open_with_retry, release_camera_lock
+        from camera_guard import acquire_camera_lock, open_with_retry
         acquire_camera_lock()
-        self._cam = StereoCamera(cfg.get("camera", {}) or {})
         try:
+            self._cam = StereoCamera(cfg.get("camera", {}) or {})
             open_with_retry(self._cam)
-        except BaseException:
-            release_camera_lock()          # 打不开就别占着锁
-            raise
-        try:
-            self._rect = load_rectifier(cfg)
-        except Exception as exc:  # noqa: BLE001
-            self._error = f"校正器加载失败，将直接用原始图推理：{exc}"
-            self._rect = None
-
-        self._est = FFSDepthEstimator(project_cfg, ffs_cfg)
-        ok, msg = self._est.weights_ready()
-        if not ok:
-            self._cam.close()
-            raise RuntimeError(f"FFS 权重不可用：{msg}")
-        self._est.load()
-
-        # 预热（用真实画面，尺寸必须与正式推理一致）
-        # 稳定性⑤: 显存不足时自动降一档预设后重试（小显存机器不至于直接崩）
-        first = self._cam.read()
-        retried = 0
-        while True:
             try:
-                self._est.warmup(self._est.warmup_iters, left=first.left, right=first.right)
-                break
-            except BaseException as exc:  # noqa: BLE001
-                lower = _next_lower(float(ffs_cfg.get("scale", 1.0) or 1.0))
-                if not _is_oom(exc) or lower is None or retried >= 2:
-                    raise
-                retried += 1
-                old_desc = f"scale={ffs_cfg.get('scale')} iters={ffs_cfg.get('valid_iters')}"
-                ffs_cfg["scale"], ffs_cfg["valid_iters"] = lower
-                self._preset = "fast" if lower[0] <= 0.5 else "balanced"
-                self._error = (f"显存不足（{type(exc).__name__}），已自动降档到 "
-                               f"scale={lower[0]} iters={lower[1]}；原设置 {old_desc}。"
-                               f"如需恢复请调小 ffs.scale 或关闭占用显存的程序。")
+                self._rect = load_rectifier(cfg)
+            except Exception as exc:  # noqa: BLE001
+                self._error = f"校正器加载失败，将直接用原始图推理：{exc}"
+                self._rect = None
+
+            self._est = FFSDepthEstimator(project_cfg, ffs_cfg)
+            ok, msg = self._est.weights_ready()
+            if not ok:
+                self._cam.close()
+                raise RuntimeError(f"FFS 权重不可用：{msg}")
+            self._est.load()
+
+            # 预热（用真实画面，尺寸必须与正式推理一致）
+            # 稳定性⑤: 显存不足时自动降一档预设后重试（小显存机器不至于直接崩）
+            first = self._cam.read()
+            retried = 0
+            while True:
                 try:
-                    self._est.close()
-                except Exception:  # noqa: BLE001
-                    pass
-                self._est = FFSDepthEstimator(project_cfg, ffs_cfg)
-                ok, msg = self._est.weights_ready()
-                if not ok:
-                    raise RuntimeError(f"FFS 权重不可用：{msg}")
-                self._est.load()
+                    self._est.warmup(self._est.warmup_iters, left=first.left, right=first.right)
+                    break
+                except BaseException as exc:  # noqa: BLE001
+                    lower = _next_lower(float(ffs_cfg.get("scale", 1.0) or 1.0))
+                    if not _is_oom(exc) or lower is None or retried >= 2:
+                        raise
+                    retried += 1
+                    old_desc = f"scale={ffs_cfg.get('scale')} iters={ffs_cfg.get('valid_iters')}"
+                    ffs_cfg["scale"], ffs_cfg["valid_iters"] = lower
+                    self._preset = "fast" if lower[0] <= 0.5 else "balanced"
+                    self._error = (f"显存不足（{type(exc).__name__}），已自动降档到 "
+                                   f"scale={lower[0]} iters={lower[1]}；原设置 {old_desc}。"
+                                   f"如需恢复请调小 ffs.scale 或关闭占用显存的程序。")
+                    try:
+                        self._est.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._est = FFSDepthEstimator(project_cfg, ffs_cfg)
+                    ok, msg = self._est.weights_ready()
+                    if not ok:
+                        raise RuntimeError(f"FFS 权重不可用：{msg}")
+                    self._est.load()
 
-        self._params = CameraParams.from_config(cfg, eye_size=self._cam.eye_size)
-        pc_cfg = dict(cfg.get("pointcloud", {}) or {})
-        self._builder = PointCloudBuilder(pc_cfg, calibrated=self._params.calibrated)
-        self._disp_scale, self._disp_offset = disp_correction_from_config(cfg)
+            self._params = CameraParams.from_config(cfg, eye_size=self._cam.eye_size)
+            pc_cfg = dict(cfg.get("pointcloud", {}) or {})
+            self._builder = PointCloudBuilder(pc_cfg, calibrated=self._params.calibrated)
+            self._disp_scale, self._disp_offset = disp_correction_from_config(cfg)
+            depth_cfg = cfg.get("depth", {}) or {}
+            ratio = float(depth_cfg.get("disp_extrapolation_ratio", 0.98) or 0.0)
+            self._max_valid = (self._est.max_disp * ratio) if ratio > 0 else None
+            self._zmin = float(depth_cfg.get("zmin_m", 0.15) or 0.15)
+            self._zmax = float(depth_cfg.get("zmax_m", 3.0) or 3.0)
+
+            out_root = os.path.join(project_cfg.get("output_dir",
+                                                    os.path.join(PROJECT_ROOT, "output")), "captures")
+            self._recorder = Recorder(out_root)
+
+            self._pipe = ThreadedPipeline(self._cam, self._est, rectifier=self._rect,
+                                          post_fn=self._postprocess).start()
+            self._started = True
+            # 注意: 不能无脑清空 _error —— OOM 自动降档等警告是在 start() 里产生的，
+            # 清掉的话用户就看不到"已降档"这条重要提示了。只在没有消息时置空。
+            self._error = self._error or None
+        except BaseException:
+            # 启动中途失败（相机已开 / 显存已占 / 权重缺失）：必须把锁一起归还。
+            # 锁文件只记 PID 并按 PID 判活，本进程残留的锁会让下一次 start()
+            # 被自己挡住，误报"另一个程序正在使用相机"。stop() 本就幂等且含释放锁。
+            self.stop()
+            raise
+
+    # ------------------------------------------------------------ 上下文管理
+    def __enter__(self) -> "Session":
+        """`with Session(...) as cam:` —— 退出时一定释放相机与推理线程。"""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.stop()
+        return None                      # 不吞异常
+
+    def reload_calibration(self) -> Dict[str, Any]:
+        """重新读取标定文件，刷新校正器 / 内参 / 点云构建器（**不重启相机、不重载模型**）。
+
+        存在意义：start() 要 3~10 秒并重新加载 FFS 权重；标定 GUI 刚保存完参数时，
+        用户希望"立刻生效"。本方法只重读 YAML 并替换引用，通常在几十毫秒内完成。
+
+        生效机制：推理线程每帧读取 self.rectifier 与 self._params，
+        因此替换引用后**下一帧**就使用新参数，无需停止线程。
+
+        返回：
+            {"rectified", "source", "baseline_m", "rect_fx", "rms_stereo_px", "image_size"}
+        异常：
+            RuntimeError —— 未 start()、标定文件读不到、或图像尺寸与当前分辨率不一致
+                            （抛异常时**原有参数保持不变**，不会出现半更新状态）。
+        """
+        if not self._started:
+            raise RuntimeError("Session 尚未 start()，无需 reload_calibration()")
+
+        with open(self.config_path, "r", encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+
+        from depth_utils import (CameraParams, disp_correction_from_config,
+                                 load_rectifier)
+        from pointcloud import PointCloudBuilder
+
+        try:
+            rect = load_rectifier(cfg)
+        except Exception as exc:                    # noqa: BLE001
+            self._error = f"重载校正器失败：{exc}"
+            raise RuntimeError(f"重载校正器失败：{exc}") from exc
+
+        eye = self._cam.eye_size
+        if rect is not None:
+            size = tuple(getattr(rect, "image_size", (0, 0)) or (0, 0))
+            if len(size) == 2 and size[0] and size[1] and \
+                    (int(size[0]), int(size[1])) != (int(eye[0]), int(eye[1])):
+                raise RuntimeError(
+                    f"标定文件图像尺寸 {int(size[0])}x{int(size[1])} 与相机实际 "
+                    f"{int(eye[0])}x{int(eye[1])} 不一致，这份标定不能用于当前分辨率")
+
+        params = CameraParams.from_config(cfg, eye_size=eye)
+        builder = PointCloudBuilder(dict(cfg.get("pointcloud", {}) or {}),
+                                    calibrated=params.calibrated)
         depth_cfg = cfg.get("depth", {}) or {}
+        scale, offset = disp_correction_from_config(cfg)
         ratio = float(depth_cfg.get("disp_extrapolation_ratio", 0.98) or 0.0)
-        self._max_valid = (self._est.max_disp * ratio) if ratio > 0 else None
-        self._zmin = float(depth_cfg.get("zmin_m", 0.15) or 0.15)
-        self._zmax = float(depth_cfg.get("zmax_m", 3.0) or 3.0)
 
-        out_root = os.path.join(project_cfg.get("output_dir",
-                                                os.path.join(PROJECT_ROOT, "output")), "captures")
-        self._recorder = Recorder(out_root)
+        # ---- 以下只做引用替换（原子操作），全部校验通过后才执行
+        self._cfg = cfg
+        self._rect = rect
+        self._params = params
+        self._builder = builder
+        self._disp_scale, self._disp_offset = scale, offset
+        self._max_valid = (self._est.max_disp * ratio) if (ratio > 0 and self._est) else None
+        self._zmin = float(depth_cfg.get("zmin_m", self._zmin) or self._zmin)
+        self._zmax = float(depth_cfg.get("zmax_m", self._zmax) or self._zmax)
+        if self._pipe is not None:
+            self._pipe.rectifier = rect
+        self._error = None
 
-        self._pipe = ThreadedPipeline(self._cam, self._est, rectifier=self._rect,
-                                      post_fn=self._postprocess).start()
-        self._started = True
-        # 注意: 不能无脑清空 _error —— OOM 自动降档等警告是在 start() 里产生的，
-        # 清掉的话用户就看不到"已降档"这条重要提示了。只在没有消息时置空。
-        self._error = self._error or None
+        return {
+            "rectified": rect is not None,
+            "source": str(depth_cfg.get("calibration_file", "")),
+            "baseline_m": float(rect.baseline_m) if rect is not None else
+                          float(getattr(params, "baseline_m", 0.0)),
+            "rect_fx": float(rect.rect_fx) if rect is not None else float(params.fx),
+            "rms_stereo_px": float(getattr(rect, "rms_stereo", 0.0)) if rect is not None else 0.0,
+            "image_size": [int(eye[0]), int(eye[1])],
+        }
 
     def stop(self) -> None:
         """幂等；GUI 退出时务必调用。"""

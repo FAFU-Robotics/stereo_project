@@ -190,6 +190,49 @@ class MainWindow(QMainWindow):
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | 0.1.0 | 2026-10-22 | 首版：`types.py` + `mock.py` + 本文档 |
+| 0.2.0 | 2026-10-24 | `Session.reload_calibration()`：换标定不重启相机、不重载模型 |
+| 0.3.0 | 2026-10-24 | 新增 `export.py`（统一导出，二进制 PLY）、`calib.py`（只读 CalibInfo）、`Session/MockSession.__enter__`、`MockSession.reload_calibration`（与 Session 公共方法完全对齐）、`pyproject.toml` 可安装 |
 
 **冻结规则**：字段名、单位、形状一旦冻结，只允许**新增**（向后兼容），不允许改名/改单位。
 确需破坏性变更时，会在 `SDK_VERSION` 升 minor 并在本表记录。
+
+## 9. v0.3.0 新增接口（向后兼容，全部为新增）
+
+### 9.1 `with` 写法
+
+```python
+from stereo_sdk import Session
+with Session("config.yaml") as cam:     # __enter__ 里 start()
+    r = cam.take_result()               # __exit__ 里 stop()，异常也不漏
+```
+
+`__exit__` 返回 `None`，**不吞异常**——调用方的错误必须能冒出来。
+
+### 9.2 `stereo_sdk.export`
+
+| 函数 | 说明 |
+|---|---|
+| `save_ply(path, points, colors, binary=True)` | 二进制 PLY 默认；`colors` 为 **BGR**，写入时转 RGB |
+| `save_depth_png(path, depth, valid)` | 16 位 PNG，毫米，0=无效 |
+| `save_depth_npy` / `save_depth_tiff` | float32 米；TIFF 需 `imagecodecs` |
+| `save_disparity_png(path, disp, fixed_scale=32)` | 16 位 PNG，像素 ×32 |
+| `save_valid_mask` | 8 位 PNG |
+| `export_result(result, out_dir, prefix)` | 一次导出整套，返回固定键名集合 |
+
+二进制 PLY 的实测体积约为 ASCII 的 **0.39 倍**（500 点样例，写成 7.5 KB vs 19.7 KB），
+点越多差距越大——ASCII 每点约 39 字节，二进制固定 15 字节。
+
+### 9.3 `stereo_sdk.calib.CalibInfo`（只读）
+
+```python
+c = CalibInfo.from_file()      # 或 CalibInfo.latest("calibration/")
+c.baseline_mm, c.fx, c.rect_fx, c.rms_stereo
+c.sigma_depth(1.0)             # σz = z²/(f·B)·σd
+c.usable_range(0.01)           # 误差 ≤1 cm 时的最远距离
+c.summary(); c.check(); c.as_dict()
+```
+
+**刻意只读**：不提供 save。写标定只有 `tools/calib_gui.py` 一个入口，
+避免出现"两处都能写、不知道哪份生效"的事故。
+
+不依赖 OpenCV / torch，只读 YAML + numpy，可以放进 CI 做门禁。

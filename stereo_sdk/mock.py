@@ -157,6 +157,26 @@ class MockSession:
         ts = time.strftime("%Y%m%d_%H%M%S")
         return f"<mock>/output/captures/{ts}_cloud (MockSession 不落盘)"
 
+    # ------------------------------------------------------- 与 Session 对齐
+    def reload_calibration(self) -> Dict[str, Any]:
+        """与 Session.reload_calibration 同签名，GUI 用 mock 开发时不会 AttributeError。
+
+        真实 Session 会重读 YAML；Mock 没有相机也没有校正器，只回一份占位信息，
+        保证界面代码可以原样跑通。
+        """
+        return {"ok": True, "mock": True,
+                "baseline_mm": 65.0, "rect_fx": 500.0,
+                "image_size": [int(self.width), int(self.height)],
+                "note": "MockSession：未读取真实标定文件"}
+
+    def __enter__(self) -> "MockSession":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.stop()
+        return None
+
     # ------------------------------------------------------------------ 合成
     def _maybe_produce(self) -> None:
         now = time.perf_counter() - self._t0

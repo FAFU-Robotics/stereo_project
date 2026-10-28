@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>量块精度对比 · CloudCompare 手工操作清单</title>
+<style>
+  :root{
+    --ink:#1b1b1b; --sub:#5a5a5a; --line:#c9c9c9; --soft:#f4f5f7;
+    --accent:#1f4e79; --warn:#8a5a00; --ok:#2f6b35;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0 auto; padding:24px 18px 60px; max-width:190mm;
+    background:#fff; color:var(--ink);
+    font-family:"Microsoft YaHei UI","Microsoft YaHei",-apple-system,"Segoe UI",sans-serif;
+    font-size:12.5px; line-height:1.62;
+  }
+  h1{font-size:19px; margin:0 0 4px; letter-spacing:.02em}
+  .meta{color:var(--sub); font-size:11.5px; border-bottom:2px solid var(--accent); padding-bottom:8px; margin-bottom:16px}
+  h2{font-size:14px; margin:22px 0 8px; padding-left:8px; border-left:4px solid var(--accent); line-height:1.3}
+  h3{font-size:12.5px; margin:14px 0 4px; color:var(--accent)}
+  p{margin:6px 0}
+  ul,ol{margin:6px 0 6px 20px; padding:0}
+  li{margin:3px 0}
+  table{border-collapse:collapse; width:100%; margin:8px 0; font-size:11.5px}
+  th,td{border:1px solid var(--line); padding:5px 6px; text-align:left; vertical-align:top}
+  th{background:var(--soft); font-weight:600}
+  td.c,th.c{text-align:center}
+  .row-hand td{height:26px}
+  code{background:var(--soft); padding:1px 4px; border-radius:3px; font-family:Consolas,monospace; font-size:11.5px}
+  .cb{display:inline-block; width:12px; height:12px; border:1.4px solid #555; border-radius:2px;
+      vertical-align:-2px; margin-right:6px}
+  .chk{list-style:none; margin-left:0}
+  .chk li{margin:5px 0; padding-left:0}
+  .box{border:1px solid var(--line); border-left:3px solid var(--accent); background:#fafbfc;
+       padding:8px 10px; margin:10px 0; border-radius:2px}
+  .warn{border-left-color:var(--warn); background:#fdf9f0}
+  .ok{border-left-color:var(--ok); background:#f4f9f4}
+  .tag{display:inline-block; font-size:10.5px; padding:0 6px; border:1px solid var(--line);
+       border-radius:9px; color:var(--sub); margin-left:6px; vertical-align:1px}
+  .fill{display:inline-block; min-width:64px; border-bottom:1px solid #888; margin:0 4px}
+  .foot{margin-top:26px; padding-top:10px; border-top:1px solid var(--line); color:var(--sub); font-size:10.5px}
+  .foot p{margin:3px 0}
+  .noprint{background:#f7f8fa; border:1px dashed #bbb; padding:8px 10px; margin:14px 0; font-size:11.5px; color:#444}
+  hr.sep{border:0; border-top:1px dashed var(--line); margin:16px 0}
+  @media print{
+    body{max-width:none; padding:0; font-size:11px}
+    .noprint{display:none}
+    h2{break-after:avoid}
+    table{break-inside:auto}
+    tr{break-inside:avoid}
+    .pagebreak{break-before:page}
+  }
+  @page{size:A4; margin:12mm}
+</style>
+</head>
+<body>
+
+<h1>量块 / 阶梯块 · CloudCompare 精度对比手工清单</h1>
+<div class="meta">
+  <div style="margin-bottom:2px">项目 <span class="fill" style="min-width:220px"></span> ／ 日期 <span class="fill" style="min-width:92px"></span> ／ 操作者 <span class="fill" style="min-width:76px"></span></div>
+  <div>相机 A（本项目双目）<span class="fill" style="min-width:96px"></span> ／ 相机 B（RealSense 型号）<span class="fill" style="min-width:96px"></span> ／ 物块编号 <span class="fill" style="min-width:76px"></span></div>
+</div>
+
+<div class="noprint">
+  本清单为打印版（A4，浅色纸面，省墨）。浏览器 <b>Ctrl+P</b> → 目标「另存为 PDF」→ 缩放「默认 / 无页边距」即可获得可勾选、可手填的纸质表。
+  第 3 节记录表已设为单独起页，便于多次复印。
+</div>
+
+<h2>0 · 开工前 5 项硬检查（任一不过就不要采集）</h2>
+<ul class="chk">
+  <li><span class="cb"></span><b>单位 = 米。</b>打开 PLY，首部 <code>comment</code> 行或坐标数值量级应在 0.1–3 之间；若出现 200–3000 这种量级 → 是毫米，先换算，否则后面全错。</li>
+  <li><span class="cb"></span><b>尺度自检。</b>先只载入一片点云，用 <code>Tools ▸ Point picking</code>（两点标签）量物块一条已知棱，读数与千分尺实测之差应 &lt; 2%。不通过就停，这是唯一能在做实验前发现系统错的方法。</li>
+  <li><span class="cb"></span><b>点云由校正后 P1 反投影。</b>本项目已标定值：<code>f_rect = 547.017 px</code>、<code>B = 64.8907 mm</code>、<code>Q[2][3] = 0.0154105</code>。用原始 K 反投影会让鱼眼物块弯曲。</li>
+  <li><span class="cb"></span><b>RealSense 后处理滤波状态已记录：</b>spatial / temporal / hole-filling 全关 或 全开，且两台相机同等处理，写进本页脚注。</li>
+  <li><span class="cb"></span><b>物块真值已测。</b>千分尺在 5 个位置各测一次，记均值与极差：均值 <span class="fill"></span> mm，极差 <span class="fill"></span> mm，测量温度 <span class="fill" style="min-width:44px"></span> ℃。量块取<b>两工作面法向距离</b>（不是棱长）。</li>
+</ul>
+
+<h2>1 · 单次采集清单（每采一组打一份勾）</h2>
+<table>
+  <tr><th style="width:34%">检查项</th><th>要求</th><th class="c" style="width:12%">完成</th></tr>
+  <tr><td>物块姿态</td><td>被测两工作面正对相机，倾角 ≤ 5°；不要侧着放</td><td class="c">□</td></tr>
+  <tr><td>距离档位</td><td>0.3 / 0.5 / 0.8 / 1.0 / 1.5 m，按支架刻度固定，同一档两台相机都拍</td><td class="c">□</td></tr>
+  <tr><td>画面位置</td><td>每档两处：画面中央、画面边角（各占面积 1/4 幅宽）</td><td class="c">□</td></tr>
+  <tr><td>光照与曝光</td><td>光源固定、关闭自动曝光；两台相机同画面、同光源，前后不超过 10 分钟</td><td class="c">□</td></tr>
+  <tr><td>静止采集</td><td>采集期间物块与相机均不动；连续 10 帧为一组，不重新摆放</td><td class="c">□</td></tr>
+  <tr><td>覆盖完整性</td><td>物块两个工作面都要有有效深度（无黑洞、无飞点）</td><td class="c">□</td></tr>
+  <tr><td>命名</td><td><code>&lt;相机&gt;_&lt;距离&gt;m_&lt;位置&gt;_&lt;序号&gt;.ply</code>，例 <code>M_0.8m_edge_03.ply</code></td><td class="c">□</td></tr>
+</table>
+
+<div class="box">
+  <b>为什么必须重复 10 次：</b>单次结果无法区分「系统误差」与「这一次的随机噪声」。10 次才能算出重复性标准差，这也是唯一能证明“稳定”的证据。
+</div>
+
+<h2>2 · CloudCompare 六步操作（每片点云各做一遍）</h2>
+
+<h3>Step 1 · 导入</h3>
+<ul class="chk">
+  <li><span class="cb"></span><code>File ▸ Open</code> 载入 PLY。<b>两片云不要合并</b>，合并会丢失“这片来自哪台相机”的信息。</li>
+  <li><span class="cb"></span>选中云，在左下 <b>Properties</b> 核对点数与包围盒边长，确认尺度正确。</li>
+</ul>
+
+<h3>Step 2 · 裁出两个工作面</h3>
+<ul class="chk">
+  <li><span class="cb"></span>选中云 → <code>Edit ▸ Segment</code>（剪刀图标）→ 左键勾多边形、右键闭合 → 点 <b>segment in</b> 保留内部。</li>
+  <li><span class="cb"></span><b>面 A</b>：只留一个工作面，边缘倒角往里收 2 mm，避免倒角把平面 RMS 拉高。</li>
+  <li><span class="cb"></span><b>面 B</b>：换视角旋转后同样裁一次，得到独立的两片云。裁完点 <b>Enter</b> 结束。</li>
+  <li><span class="cb"></span>每个面保留点数：≥ 5000 点（少于这个数，拟合随机性会盖过真实误差）。</li>
+</ul>
+
+<h3>Step 3 · 拟合面 A</h3>
+<ul class="chk">
+  <li><span class="cb"></span>选中面 A 云 → <code>Tools ▸ Fit ▸ Plane</code>。</li>
+  <li><span class="cb"></span>从 <b>Console</b> 抄下 <b>plane fitting RMS</b>（单位＝点云单位，即米，记表时 ×1000 换成 mm）。</li>
+  <li><span class="cb"></span>拟合平面会作为子实体挂在云下面，是一个三角网格——下一步要用它。</li>
+</ul>
+
+<h3>Step 4 · 量厚度（面 B 点 → 面 A 平面）</h3>
+<ul class="chk">
+  <li><span class="cb"></span>同时选中「面 B 的点云」＋「面 A 的拟合平面」→ <code>Tools ▸ Distances ▸ Cloud/Mesh Dist.</code></li>
+  <li><span class="cb"></span><b>勾选 signed distances</b>（云到网格可带符号，这是与云-云距离的关键差别）。</li>
+  <li><span class="cb"></span>选中面 B 云 → 左下 Properties ▸ Scalar Fields → 读 <b>mean（带符号＝实测厚度）</b> 与 <b>std</b>。</li>
+  <li><span class="cb"></span>顺手看一眼直方图：出现双峰 → 匹配出了条纹误配，这片云作废重采。</li>
+</ul>
+<div class="box warn">
+  <b>这一步最容易出错的地方：</b>拟合平面网格的范围由面 A 点云自动决定。若面 B 的点超出该网格边界，边界点会被算到最近三角形边缘上，<b>mean 与 std 会同时虚大</b>。处置：只保留面 B 落在面 A 覆盖范围内的中心区域，或裁掉面 B 外圈 15%。CloudCompare 官方文档对此的原文提醒是「参考云的范围应大于被比较云，以避免边界上的虚假大距离」。
+</div>
+
+<h3>Step 5 · 反向再做一次（自洽性检查）</h3>
+<ul class="chk">
+  <li><span class="cb"></span>反过来：拟合面 B 的平面，用面 A 的点去量它，得第二个厚度值。</li>
+  <li><span class="cb"></span>两次之差记入表内「自洽差」列。这个差值代表<b>方法本身</b>的不确定度，理想应 &lt; 2 mm。</li>
+</ul>
+
+<h3>Step 6 · 分区重做（中心 / 边缘）</h3>
+<ul class="chk">
+  <li><span class="cb"></span>同一片云里把物块切成「中心 1/3」与「外圈」两块，各重跑 Step 3–4。</li>
+  <li><span class="cb"></span>中心与边缘的 ΔD 之差，就是畸变残差的直接证据——这比任何 RMS 数字都更能说明问题。</li>
+</ul>
+
+<h2 class="pagebreak">3 · 记录表（每行一次测量）</h2>
+<p style="font-size:11px;color:var(--sub)">相机列：<code>A</code>=本项目双目，<code>B</code>=RealSense。距离与厚度单位 mm。<b>ΔD = 实测厚度 − 真值</b>；<b>自洽差</b> = 正反两次测量的厚度之差；<b>std</b> 取该次云-网格距离的标准差。</p>
+<table>
+  <tr>
+    <th class="c" style="width:5%">#</th>
+    <th class="c" style="width:6%">相机</th>
+    <th class="c" style="width:9%">距离<br>(m)</th>
+    <th class="c" style="width:8%">位置</th>
+    <th class="c" style="width:11%">面A RMS</th>
+    <th class="c" style="width:11%">面B RMS</th>
+    <th class="c" style="width:13%">实测厚度<br>mean</th>
+    <th class="c" style="width:9%">std</th>
+    <th class="c" style="width:10%">ΔD<br>(mm)</th>
+    <th class="c" style="width:9%">自洽差</th>
+  </tr>
+  <tr class="row-hand"><td class="c">1</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">2</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">3</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">4</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">5</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">6</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">7</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">8</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">9</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">10</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">11</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">12</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">13</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">14</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">15</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+  <tr class="row-hand"><td class="c">16</td><td class="c"></td><td class="c"></td><td class="c"></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+</table>
+
+<h2>4 · 判据（列表值与换算）</h2>
+<p>深度误差与视差误差的关系为 σz = Z²·Δd / (f·B)。代入本项目标定值 f = 547.017 px、B = 64.8907 mm：</p>
+<table>
+  <tr><th class="c">距离 Z</th><th class="c">1 px 视差误差<br>对应 σz</th><th class="c">0.3 px 目标<br>对应 σz</th><th>本档 |ΔD| 应 ≤</th></tr>
+  <tr><td class="c">0.5 m</td><td class="c">7.0 mm</td><td class="c">2.1 mm</td><td>2 mm</td></tr>
+  <tr><td class="c">0.8 m</td><td class="c">18.0 mm</td><td class="c">5.4 mm</td><td>5 mm</td></tr>
+  <tr><td class="c">1.0 m</td><td class="c">28.2 mm</td><td class="c">8.5 mm</td><td>8 mm</td></tr>
+  <tr><td class="c">1.5 m</td><td class="c">63.4 mm</td><td class="c">19.0 mm</td><td>19 mm</td></tr>
+</table>
+<p style="font-size:11px;color:var(--sub)">表中「应 ≤」一列以有效匹配精度 0.3 px 为假设推算，属于<b>可调目标值</b>，不是行业标准。若实测明显优于它，说明你的匹配优于 0.3 px；若明显差于它，把实测 σz 代回公式反推实际 Δd = σz·f·B / Z²，就能判断问题在匹配还是在标定。</p>
+<ul class="chk">
+  <li><span class="cb"></span>同一档 10 次 ΔD 的标准差 ≤ 2 mm（重复性合格）</li>
+  <li><span class="cb"></span>中心区 ΔD 与边缘区 ΔD 之差 ≤ 5 mm（畸变残差可接受）</li>
+  <li><span class="cb"></span>正反两次厚度差 ≤ 2 mm（方法自洽）</li>
+  <li><span class="cb"></span>面 A／面 B 的拟合 RMS 与该距离的 σz 同量级（不应大一个数量级）</li>
+</ul>
+
+<h2>5 · 故障对照表</h2>
+<table>
+  <tr><th style="width:30%">现象</th><th style="width:32%">最可能原因</th><th>处置</th></tr>
+  <tr><td>物块在点云里明显偏小／偏大一个固定倍数</td><td>单位错（毫米被当成米读）</td><td>改 PLY 坐标或统一换算，回到第 0 节做尺度自检</td></tr>
+  <tr><td>平面看起来是碗状／波浪，不是平的</td><td>反投影用了原始 K 而非校正后 P1</td><td>检查点云生成链路，重导 PLY</td></tr>
+  <tr><td>ΔD 随距离成比例增大</td><td>基线或焦距存在比例误差（标定问题）</td><td>用 Δd = ΔD·f·B/Z² 反推，若 Δd 随距离稳定则改标定</td></tr>
+  <tr><td>边缘 ΔD 远大于中心 ΔD</td><td>畸变残差；标定板只覆盖画面中央</td><td>重标定并让标定板覆盖到画面边缘</td></tr>
+  <tr><td>距离直方图呈双峰</td><td>物块纹理重复，匹配出现条纹误配</td><td>该帧作废；给物块贴随机纹理或换光照</td></tr>
+  <tr><td>mean 很大且 std 也很大</td><td>面 B 的点超出面 A 平面网格边界</td><td>裁掉面 B 外圈，或裁面 A 时留更大范围</td></tr>
+  <tr><td>正反两次厚度差很大</td><td>两工作面不平行，或裁面时带进了倒角</td><td>确认物块是量块（平行度有保证），裁面内缩 2 mm</td></tr>
+  <tr><td>两台相机 ΔD 都朝同一方向偏</td><td>真值本身测错（量错了面、温度未修正）</td><td>重新用千分尺测两工作面法向距离</td></tr>
+</table>
+
+<h2>6 · 结论填写</h2>
+<table>
+  <tr><th style="width:26%">项目</th><th>结论</th></tr>
+  <tr class="row-hand"><td>本项目相机 1 m 处尺寸误差</td><td>　</td></tr>
+  <tr class="row-hand"><td>RealSense 同条件尺寸误差</td><td>　</td></tr>
+  <tr class="row-hand"><td>重复性（10 次 std）</td><td>　</td></tr>
+  <tr class="row-hand"><td>中心 / 边缘差异</td><td>　</td></tr>
+  <tr class="row-hand"><td>反推实际视差噪声 Δd</td><td>　</td></tr>
+  <tr class="row-hand"><td>主要误差来源判断</td><td>　</td></tr>
+</table>
+
+<div class="box ok">
+  <b>一个必须写进结论的限定条件：</b>RealSense D400 系列官方指标为 Z 向绝对误差 ≤2% @2 m、RMS 空间噪声 ≤2%、时间噪声 ≤1%（80% ROI、HD 分辨率）。这意味着它的允差与被测对象同量级，<b>因此它与本项目相机之间的差值不能判定谁对</b>，只能作为“是否同量级”的旁证。真值只来自量块。
+</div>
+
+<div class="foot">
+  <p><b>工具出处：</b>CloudCompare. “Fit Plane.” <i>CloudCompare Wiki</i>, cloudcompare.org/doc/wiki/index.php?title=Fit_Plane. ／ CloudCompare. “Fit Sphere.” 同上. ／ CloudCompare. “Cloud-to-Cloud Distance.” 同上. ／ CloudCompare. “Interactive Segmentation Tool.” 同上. ／ CloudCompare. “Distances Computation.” 同上. ／ RealSense. “Depth accuracy for Intel RealSense D400 Series Cameras.” <i>RealSense Support</i>, support.realsenseai.com/hc/en-us/articles/360059129453. 全部访问于 2026-10-27。</p>
+  <p><b>本页判据性质：</b>第 4 节的 |ΔD| 阈值由 σz 公式推算得出，属可调目标值；其余操作步骤与菜单路径均取自上列官方文档。</p>
+  <p>生成时间 2026-10-27 · 对应标定文件 <code>calibration/stereo_calib.yaml</code>（baseline 64.8907 mm / rectified_fx 547.017 px）</p>
+</div>
+
+</body>
+</html>

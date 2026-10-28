@@ -34,7 +34,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+try:
+    from app_paths import data_root as _data_root
+except ImportError:                        # 兜底：与改造前行为一致
+    def _data_root() -> str:
+        return os.path.dirname(os.path.abspath(__file__))
+
+PROJECT_ROOT = _data_root()
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 

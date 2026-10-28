@@ -44,6 +44,21 @@ def newest_capture_dir(root: str) -> str:
     return max(subs, key=os.path.getmtime)
 
 
+def image_size_of(frames_dir: str) -> tuple:
+    """读采集目录里第一张左图的真实尺寸 (W, H)。
+
+    原先这里写死 (640, 480)：换分辨率重标时会用错 image_size，
+    标定能"成功"但结果与实际图像不匹配，且不报错。
+    """
+    import glob
+    import cv2
+    for p in sorted(glob.glob(os.path.join(frames_dir, "left_*.png"))):
+        img = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            return (int(img.shape[1]), int(img.shape[0]))
+    return (640, 480)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="双目标定计算（阶段 5 步骤 2）")
     ap.add_argument("--config", default=os.path.join(PROJECT_ROOT, "config.yaml"))
@@ -94,8 +109,10 @@ def main(argv=None) -> int:
 
     # ---- ②③ 标定
     t0 = time.perf_counter()
+    img_size = image_size_of(frames_dir)
+    print(f"  图像尺寸（从实际图片读出）：{img_size[0]}x{img_size[1]}")
     try:
-        calib = calibrate_stereo(left_pts, right_pts, spec, (640, 480),
+        calib = calibrate_stereo(left_pts, right_pts, spec, img_size,
                                  fix_intrinsic=not args.refix_intrinsic,
                                  extra_meta={"capture_dir": os.path.basename(frames_dir)})
     except Exception as exc:  # noqa: BLE001

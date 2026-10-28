@@ -24,7 +24,14 @@
 
 【有相机之后】
     from stereo_sdk import Session
-    s = Session("config.yaml"); s.start()   # 记得在后台线程里 start ⚠️
+    with Session("config.yaml") as s:        # with 写法：退出自动 stop()
+        r = s.take_result()
+
+【导出与标定信息】
+    from stereo_sdk.export import export_result
+    export_result(r, "out/", prefix="seq001")     # 左右图/视差/深度/点云一次写全
+    from stereo_sdk.calib import CalibInfo
+    print(CalibInfo.from_file().summary())        # 基线、fx、RMS、可信量程
 
 【约定（务必遵守）】
     图像 = BGR uint8；深度 = float32 米（0=无效，另给 valid 掩码）；
@@ -41,6 +48,7 @@ __all__ = [
     "SDK_VERSION", "TIMING_KEYS", "FramePair", "DepthResult",
     "HOT_PARAMS", "RESTART_PARAMS", "check_frame", "check_result",
     "Session", "MockSession", "get_session",
+    "CalibInfo", "export_result",
 ]
 
 
@@ -60,4 +68,10 @@ def __getattr__(name: str):  # 惰性导入：只有真的用到真 Session 才�
     if name == "MockSession":
         from .mock import MockSession as _M
         return _M
+    if name == "CalibInfo":
+        from .calib import CalibInfo as _C
+        return _C
+    if name == "export_result":
+        from .export import export_result as _E
+        return _E
     raise AttributeError(f"module 'stereo_sdk' has no attribute {name!r}")

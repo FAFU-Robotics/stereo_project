@@ -54,8 +54,63 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 
+# =============================================================================
+# Python 3.14+ 兼容：torch.compile 是**硬错误**，而 FFS 在模块顶层就用它做装饰器
+# -----------------------------------------------------------------------------
+# 实测（2026-10-27，torch 2.9.1+cu128 / Python 3.14.6）：
+#     torch/__init__.py:2590  raise RuntimeError("torch.compile is not supported on Python 3.14+")
+# 而 third_party/.../core/submodule.py:376 是 `@torch.compile` ——
+# **装饰器在 import 阶段就求值**，所以不处理的话 `import core.foundation_stereo` 直接抛
+# RuntimeError，整个推理链路在 3.14 上完全不可用。
+#
+# TORCHDYNAMO_DISABLE=1 管不住它：那个开关决定"是否真的去编译"，而这里是版本检查，
+# 在真正编译之前就把函数拒了。
+#
+# 处理方式：把 torch.compile 换成恒等装饰器。
+# 为什么这不改变数值结果：在 3.12/3.13 + TORCHDYNAMO_DISABLE=1 的组合下，
+# 装饰器本来也只是把函数包一层、按原样逐条执行（FFS 里没有任何地方依赖它的图语义）。
+# 也就是说"恒等替换"与"已经验证过可用"的那套环境行为等价。
+# =============================================================================
+if sys.version_info >= (3, 14) and not getattr(torch.compile, "_stereo_identity", False):
+
+    def _identity_compile(model=None, **kwargs):  # type: ignore[misc]
+        """替代 torch.compile：不编译，原样返回传入的可调用对象。"""
+        if model is None:
+            return lambda fn: fn
+        return model
+
+    _identity_compile._stereo_identity = True  # type: ignore[attr-defined]
+    torch.compile = _identity_compile  # type: ignore[assignment]
+
+
 class FFSError(RuntimeError):
     """FFS 相关的可预期错误（权重缺失、接口不符、显存不足等）。"""
+
+
+def _project_root_hint(repo_root: str) -> str:
+    """项目根的"提示值"：只用于报错信息里显示，不参与真实查找。
+
+    打包后 repo_root/../.. 会指向 _MEIPASS（只读临时目录），而用户真正关心的
+    "权重该放哪"是可写根（exe 旁边）。所以优先问 app_paths。
+    """
+    try:
+        from app_paths import data_root
+        return data_root()
+    except Exception:                        # noqa: BLE001 —— app_paths 缺失时退回旧算法
+        return os.path.normpath(os.path.join(repo_root, "..", ".."))
+
+
+def _find_resource(rel: str, fallback_root: str) -> str:
+    """按"可写根 → 只读根 → cwd"找只读资源（权重、FFS 仓库）。
+
+    这样三种部署方式都能跑：源码运行、权重打进包里（_MEIPASS）、
+    权重放在 exe 旁边（用户可自行替换/升级权重）。
+    """
+    try:
+        from app_paths import resource
+        return resource(rel)
+    except Exception:                        # noqa: BLE001
+        return os.path.normpath(os.path.join(fallback_root, rel))
 
 
 def _ensure_ffs_on_path(repo_root: str) -> None:
@@ -100,12 +155,15 @@ class FFSDepthEstimator:
 
         self.repo_root: str = os.path.normpath(str(self.project_cfg.get("ffs_repo", "")))
         weights_rel: str = str(self.cfg.get("weights_dir", "weights/23-36-37"))
-        # weights_dir 可能是相对项目根目录的路径，这里统一成绝对路径
-        base = os.path.dirname(os.path.abspath(self.repo_root))
-        # 项目根目录 = repo_root/../..（third_party/Fast-FoundationStereo -> 项目根）
-        self.project_root = os.path.normpath(os.path.join(self.repo_root, "..", ".."))
-        self.weights_dir = weights_rel if os.path.isabs(weights_rel) else os.path.join(self.project_root, weights_rel)
-        self.weights_dir = os.path.normpath(self.weights_dir)
+        # 权重目录是**只读资源**。原来靠 repo_root/../.. 反推项目根，这在源码布局下成立
+        # （third_party/Fast-FoundationStereo -> 项目根），但打包后 exe 目录层级变了，
+        # 而且用户很可能想把权重放在 exe 旁边方便替换。
+        # 所以改成"按相对路径去找"：可写根 → _MEIPASS → cwd，见 app_paths.resource()。
+        self.project_root = _project_root_hint(self.repo_root)
+        if os.path.isabs(weights_rel):
+            self.weights_dir = os.path.normpath(weights_rel)
+        else:
+            self.weights_dir = _find_resource(weights_rel, self.project_root)
         self.model_file: str = str(self.cfg.get("model_file", "model_best_bp2_serialize.pth"))
         self.model_path = os.path.join(self.weights_dir, self.model_file)
         self.cfg_path = os.path.join(self.weights_dir, "cfg.yaml")
@@ -129,7 +187,6 @@ class FFSDepthEstimator:
             "model_input_size": (0, 0),
         }
         self._warned_large = False
-        _ = base  # 保留变量名便于后续扩展，避免误用
 
     # ------------------------------------------------------------ 权重可用性
     def weights_ready(self) -> Tuple[bool, str]:
@@ -201,7 +258,8 @@ class FFSDepthEstimator:
             f"[FFS] 模型已加载（{self.load_seconds:.2f}s，{n_param:.1f}M 参数）\n"
             f"      设备={self.device}({torch.cuda.get_device_name(0) if self.device == 'cuda' else 'CPU'}) "
             f"valid_iters={self.valid_iters} max_disp={self.max_disp} "
-            f"代价体后端={self.build_volume} torch.compile={'关闭' if os.environ.get('TORCHDYNAMO_DISABLE') == '1' else '开启'}"
+            f"代价体后端={self.build_volume} "
+            f"torch.compile={'恒等替换(Py3.14+)' if getattr(torch.compile, '_stereo_identity', False) else ('关闭' if os.environ.get('TORCHDYNAMO_DISABLE') == '1' else '开启')}"
         )
 
     # ---------------------------------------------------------------- 推理

@@ -36,7 +36,24 @@ from camera import (CameraError, CameraReadError, FramePair, StereoCamera, frame
                     list_video_devices_from_registry, quick_probe_index)
 from viewer import StereoViewer
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# ---- 路径解析：源码运行 = 项目根；打包成 EXE 后 = exe 所在目录 ---------------
+# 直接用 __file__ 推断在三种部署下会指错地方（源码 / onefile 的 _MEIPASS /
+# onedir 的 exe 同目录），统一交给 app_paths 判断，见该文件头部说明。
+try:
+    from app_paths import data_root as _data_root, data as _data_path, resource as _resource
+except ImportError:                        # 兜底：与改造前行为一致
+    _ROOT_FALLBACK = os.path.dirname(os.path.abspath(__file__))
+
+    def _data_root() -> str:
+        return _ROOT_FALLBACK
+
+    def _data_path(rel: str) -> str:
+        return os.path.normpath(os.path.join(_ROOT_FALLBACK, rel))
+
+    def _resource(rel: str) -> str:
+        return os.path.normpath(os.path.join(_ROOT_FALLBACK, rel))
+
+PROJECT_ROOT = _data_root()
 
 
 # -----------------------------------------------------------------------------
@@ -54,10 +71,20 @@ def load_config(path: str) -> Dict[str, Any]:
         cfg = yaml.safe_load(fh)
     if not isinstance(cfg, dict):
         raise ValueError(f"配置文件格式不对（顶层应为字典）：{path}")
-    # 把相对路径统一解析成"相对项目根目录"的绝对路径，避免换个工作目录就跑不起来
+    # 把相对路径统一解析成绝对路径，避免换个工作目录就跑不起来。
+    # 只读资源（ffs_repo / weights_dir）走 resource()：打包后在 _MEIPASS 里也能找到；
+    # 可写数据（output_dir / calibration_dir）走 data()：永远落在 exe 旁边，
+    # 绝不会写进"退出即删"的临时目录。
     for key in ("ffs_repo", "output_dir", "weights_dir", "calibration_dir"):
-        if key in cfg.get("project", {}):
-            cfg["project"][key] = os.path.normpath(os.path.join(PROJECT_ROOT, cfg["project"][key]))
+        if key not in cfg.get("project", {}):
+            continue
+        rel = str(cfg["project"][key])
+        if os.path.isabs(rel):
+            cfg["project"][key] = os.path.normpath(rel)
+        elif key in ("output_dir", "calibration_dir"):
+            cfg["project"][key] = _data_path(rel)
+        else:
+            cfg["project"][key] = _resource(rel)
     return cfg
 
 

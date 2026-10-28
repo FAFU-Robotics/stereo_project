@@ -22,8 +22,9 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-# 接口版本：GUI 端请把它显示在"关于"里，联调时一眼看出两边版本是否一致
-SDK_VERSION = "0.1.0"
+# 接口版本：GUI 端请把它显示在"关于"里，联调时一眼看出两边版本是否一致。
+# 这是**唯一版本来源**——pyproject.toml 用 dynamic 从这里读，不要再在别处写死版本号。
+SDK_VERSION = "0.3.0"
 
 # timing 字典里保证出现的键（GUI 画曲线时按这些键取，不要假设别的键）
 TIMING_KEYS = ("capture", "rectify", "infer", "cloud", "display")

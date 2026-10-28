@@ -39,7 +39,13 @@ class CameraBusyError(RuntimeError):
 
 
 def _default_lock_path() -> str:
-    root = os.path.dirname(os.path.abspath(__file__))
+    # 必须落在**可写**的数据根：打包成 onefile 后 __file__ 位于 _MEIPASS 临时目录，
+    # 那里退出即删且不可写，锁文件写不进去会变成"永远抢不到锁"。
+    try:
+        from app_paths import data_root
+        root = data_root()
+    except Exception:                     # noqa: BLE001 —— 单独拿本模块用时仍可跑
+        root = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(root, "output", ".camera.lock")
 
 
