@@ -43,7 +43,7 @@ if errorlevel 1 (
 
 title stereo_project (ADMIN)
 set "PROJECT_ROOT=%~dp0.."
-set "PY=D:\31931\Documents\python312\python.exe"
+call "%~dp0find_python.bat"
 set "PYTHONPATH=%PROJECT_ROOT%\_work\dsgraph"
 set "TEMP=%PROJECT_ROOT%\_work\pip_tmp"
 set "TMP=%TEMP%"

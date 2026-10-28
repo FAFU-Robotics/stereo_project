@@ -20,17 +20,37 @@ setlocal EnableExtensions
 chcp 65001 >nul 2>&1
 
 set "PROJECT_ROOT=%~dp0.."
-set "PY=D:\31931\Documents\python312\python.exe"
+REM Interpreter lookup is shared by all launchers (see tools\find_python.bat).
+call "%~dp0find_python.bat"
+if not exist "%PY%" (
+  echo [ERROR] No Python found -- see tools\find_python.bat
+  pause
+  exit /b 1
+)
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "KMP_DUPLICATE_LIB_OK=TRUE"
 set "TORCHDYNAMO_DISABLE=1"
 cd /d "%PROJECT_ROOT%"
 
-if not exist "%PY%" (
-  echo [ERROR] project python not found: %PY%
+REM Hard requirement for every menu item: cv2 + numpy + yaml
+"%PY%" -c "import cv2, numpy, yaml" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] %PY%
+  echo         cannot import cv2 / numpy / pyyaml. Install them with:
+  echo         "%PY%" -m pip install opencv-contrib-python numpy pyyaml
   pause
   exit /b 1
+)
+
+REM Soft requirement: menu 1/2/3 need torch, 4/5 do not
+"%PY%" -c "import torch" >nul 2>&1
+if errorlevel 1 (
+  echo [WARN] this interpreter cannot import torch:
+  echo        %PY%
+  echo        Menu 1/2/3 will fail; 4/5 still work. Point PY= at the
+  echo        Python 3.14 install that has torch 2.9.1+cu128.
+  echo.
 )
 
 REM Warn if this window happens to be elevated: it works, but it is not needed

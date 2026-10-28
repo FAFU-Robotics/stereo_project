@@ -14,7 +14,7 @@ setlocal EnableExtensions
 chcp 65001 >nul 2>&1
 
 set "PROJECT_ROOT=%~dp0.."
-set "PY=D:\31931\Documents\python312\python.exe"
+call "%~dp0find_python.bat"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "KMP_DUPLICATE_LIB_OK=TRUE"
