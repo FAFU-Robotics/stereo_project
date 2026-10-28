@@ -375,11 +375,17 @@ class CalibApp(tk.Tk):
         self.check_out: Optional[Dict[str, Any]] = None
         self.frames_dir = start_dir or self.state.get("dir", "")
         self._photos: Dict[str, Any] = {}        # 防止 PhotoImage 被回收
+        self._last_img: Dict[str, np.ndarray] = {}   # 每个显示区的原图，供缩放重绘
+        self._fit_job = None                     # 尺寸变化后的重绘防抖句柄
         self._last_frame = None                  # 最近一帧（保存按钮要用，take() 会消费掉）
         self.q: "queue.Queue" = queue.Queue()
 
         self._build_vars()
         self._build_ui()
+        # 窗口/面板尺寸一变就按新尺寸重画：不带这个绑定，最大化后图仍是建窗时的大小，
+        # 四周留大片黑边（实测标签 1069x1268、图只有 430x322，仅占 10.2% 面积）
+        for _lbl in (self.lbl_left, self.lbl_right, self.lbl_check):
+            _lbl.bind("<Configure>", self._on_image_resize, add="+")
         self._refresh_dirs()
         self._refresh_archives()
         self._update_check_hint()
@@ -833,18 +839,70 @@ class CalibApp(tk.Tk):
         widget.insert("1.0", text)
         widget.configure(state="disabled")
 
+    @staticmethod
+    def _fit_size(src_w: int, src_h: int, box_w: int, box_h: int) -> Tuple[int, int]:
+        """等比缩放到刚好放进 box 的尺寸：可放大也可缩小，宽高比不变。"""
+        if src_w <= 0 or src_h <= 0 or box_w <= 0 or box_h <= 0:
+            return max(src_w, 1), max(src_h, 1)
+        s = min(box_w / float(src_w), box_h / float(src_h))
+        return max(int(round(src_w * s)), 1), max(int(round(src_h * s)), 1)
+
+    def _on_image_resize(self, _evt=None) -> None:
+        """面板尺寸变化：防抖 120 ms 后按新尺寸重画。
+
+        不防抖的话，拖动窗口边缘会每一像素都重算一次缩放+PNG 编码，界面直接卡住。
+        """
+        if self._fit_job is not None:
+            try:
+                self.after_cancel(self._fit_job)
+            except Exception:               # noqa: BLE001
+                pass
+        self._fit_job = self.after(120, self._redraw_images)
+
+    def _redraw_images(self) -> None:
+        """用保存下来的原图按当前尺寸重画三个常驻显示区。"""
+        self._fit_job = None
+        for key, label in (("live_l", self.lbl_left), ("live_r", self.lbl_right),
+                           ("chk", self.lbl_check)):
+            img = self._last_img.get(key)
+            if img is None:
+                continue
+            # 尺寸没变就不重编码：Configure 事件会连发，重复重画既费时又会闪
+            h, w = img.shape[:2]
+            tw, th = self._fit_size(w, h, label.winfo_width(), label.winfo_height())
+            ph = self._photos.get(key)
+            if ph is not None and (ph.width(), ph.height()) == (tw, th):
+                continue
+            try:
+                self._show(img, label, key, fit=True)
+            except Exception:               # noqa: BLE001
+                pass
+
     def _show(self, bgr: Optional[np.ndarray], label: ttk.Label, key: str,
-              max_w: int = 560, max_h: int = 420) -> None:
+              max_w: int = 560, max_h: int = 420, fit: bool = False) -> None:
+        """把 BGR 图贴到 label 上。
+
+        fit=True ：按 label 的当前像素尺寸等比缩放，窗口最大化后自动铺满可用区；
+        fit=False：按 max_w/max_h 缩略且**不放大**（弹窗、缩略图这类固定尺寸场合）。
+        """
         if bgr is None:
             return
         img = bgr
         h, w = img.shape[:2]
         if h <= 1 or w <= 1:
             return
-        s = min(max_w / float(w), max_h / float(h), 1.0)
-        if s < 0.999:
-            img = cv2.resize(img, (max(int(w * s), 1), max(int(h * s), 1)),
-                             interpolation=cv2.INTER_AREA)
+        self._last_img[key] = img               # 原图留一份，窗口缩放时不必重新采集
+        if fit:
+            bw, bh = label.winfo_width(), label.winfo_height()
+            if bw < 40 or bh < 40:              # 布局还没完成，退回调用方给的框
+                bw, bh = max_w, max_h
+            tw, th = self._fit_size(w, h, bw, bh)
+        else:
+            s = min(max_w / float(w), max_h / float(h), 1.0)
+            tw, th = max(int(w * s), 1), max(int(h * s), 1)
+        if (tw, th) != (w, h):
+            interp = cv2.INTER_AREA if tw < w else cv2.INTER_LINEAR
+            img = cv2.resize(img, (tw, th), interpolation=interp)
         ph = _make_photo(img)
         if ph is None:
             return
@@ -1062,8 +1120,8 @@ class CalibApp(tk.Tk):
             right_vis = cc.draw_overlay(pair.right, res, self.spec, side="right")
         except Exception:                   # noqa: BLE001
             left_vis, right_vis = pair.left, pair.right
-        self._show(left_vis, self.lbl_left, "live_l", max_w=430, max_h=360)
-        self._show(right_vis, self.lbl_right, "live_r", max_w=430, max_h=360)
+        self._show(left_vis, self.lbl_left, "live_l", fit=True)
+        self._show(right_vis, self.lbl_right, "live_r", fit=True)
 
         level = res.get("level", "bad")
         tag = {"ok": "可保存", "warn": "勉强可用", "bad": "不可用"}.get(level, level)
@@ -1484,7 +1542,7 @@ class CalibApp(tk.Tk):
             "覆盖热力图": "coverage",
             "分区 |dy| 热力图": "region",
         }.get(key, "stack")
-        self._show(imgs.get(pick), self.lbl_check, "chk", max_w=1000, max_h=460)
+        self._show(imgs.get(pick), self.lbl_check, "chk", fit=True)
 
     def _save_check_image(self) -> None:
         if self.check_out is None:
