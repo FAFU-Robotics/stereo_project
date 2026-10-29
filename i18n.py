@@ -20,9 +20,16 @@ import os
 from typing import Any, Dict, Optional
 
 _LANG = "zh"
+_EXPLICIT = False        # 命令行 --lang 指定过，就不再被配置文件覆盖
 
 #: 英文翻译表。键必须与源码里的中文原文完全一致（含空格与换行）。
 _EN: Dict[str, str] = {
+    # ---- 语言选择器 ----
+    "界面语言": "Language",
+    "中文": "中文",              # 下拉框里两种语言始终用各自母语显示
+    "界面语言已切换为中文": "Language switched to Chinese",
+    "界面语言已切换为 English": "Language switched to English",
+
     # ---- 启动菜单 ----
     "选择要打开的功能。关闭本窗口即退出程序。": "Choose what to open. Closing this window exits the app.",
     "主界面（设备 / 深度 / 点云 / 采集 / 标定）": "Main window (device / depth / cloud / capture / calibration)",
@@ -38,6 +45,7 @@ _EN: Dict[str, str] = {
     "双目深度相机": "Stereo Depth Camera",
     "未连接": "Offline",
     "分辨率 —    帧率 —": "Resolution —    FPS —",
+    "分辨率未知": "resolution unknown",
     "就绪。开始串流后可在 2D / 3D 之间切换。标定请先停止串流。":
         "Ready. Start streaming to switch between 2D and 3D. Stop streaming before calibration.",
     "开始串流": "Start streaming",
@@ -74,6 +82,15 @@ _EN: Dict[str, str] = {
     "已暂停显示": "Display paused",
     "已回到实时画面": "Back to live view",
     "未选择画面": "No view selected",
+    "串流已停止\n\n右上角可以再次开始\n右侧结果仍可点开回看":
+        "Streaming stopped\n\nYou can start again from the top right\n"
+        "Results on the right can still be opened",
+    "串流已停止": "Streaming stopped",
+    "停止时出错：": "Error while stopping: ",
+    "已打开标定工作台。采集、标定、检查、保存都在那个窗口里。":
+        "Calibration console opened. Capture, calibrate, inspect and save happen in that window.",
+    "未知": "unknown",
+    "正在读取 ": "Reading ",
     "没有可显示的画面\n在左侧勾选彩色、深度或视差，或切到 3D":
         "Nothing to show\nEnable Color, Depth or Disparity on the left, or switch to 3D",
     "尚未串流\n\n右上角开始串流，查看彩色、深度和点云\n":
@@ -84,7 +101,7 @@ _EN: Dict[str, str] = {
     "保存的采集与快照在右侧点选即可回看":
         "Saved captures and snapshots can be opened from the right panel",
     "  3D  左键旋转    右键平移    滚轮缩放      深度图上移动鼠标可读距离      空格暂停      S 保存当前帧":
-        "  3D  Drag to orbit · Right-drag to pan · Wheel to zoom      Move over depth to read distance      Space to pause      S to save",
+        "  3D: drag / wheel to orbit · hover depth for distance · Space pause · S save",
     "  3D  左键旋转    右键平移    滚轮缩放":
         "  3D  Drag to orbit · Right-drag to pan · Wheel to zoom",
     "      深度图上移动鼠标可读距离      空格暂停      S 保存当前帧":
@@ -173,13 +190,26 @@ _EN_TF: Dict[str, str] = {
     "正在回看 {label}（{bits}）": "Playing back {label} ({bits})",
     "{title}结束，退出码 {rc}": "{title} exited with code {rc}",
     "正在打开 {name}…": "Opening {name}…",
+    "语言偏好没有写回 {path}": "Could not save the language preference to {path}",
+    "{eye}    采集 {cap:.1f} fps    推理 {inf:.2f} fps    中位 {med:.3f} m    {preset}":
+        "{eye}    capture {cap:.1f} fps    inference {inf:.2f} fps    median {med:.3f} m    {preset}",
+    "{eye}    有效 {valid:.0f}%    点数 {pts}":
+        "{eye}    valid {valid:.0f}%    points {pts}",
+    "正在读取 {name}": "Reading {name}",
+    "停止时出错：{exc}": "Error while stopping: {exc}",
+    "打不开目录：{exc}": "Cannot open folder: {exc}",
 }
 
 
-def set_language(lang: Optional[str]) -> str:
-    """设置界面语言：'en' / 'zh'（其它值按中文处理）。返回生效值。"""
-    global _LANG
+def set_language(lang: Optional[str], explicit: bool = False) -> str:
+    """设置界面语言：'en' / 'zh'（其它值按中文处理）。返回生效值。
+
+    explicit=True 表示来自命令行 --lang，后续 resolve_language 不再用配置覆盖它。
+    """
+    global _LANG, _EXPLICIT
     _LANG = "en" if str(lang or "").lower().startswith("en") else "zh"
+    if explicit:
+        _EXPLICIT = True
     return _LANG
 
 
@@ -218,7 +248,9 @@ def tf(template: str, **kwargs: Any) -> str:
 def resolve_language(config_path: str = "", cli_lang: str = "") -> str:
     """按「命令行 > 配置文件 ui.language > zh」决定语言并设置。"""
     if cli_lang:
-        return set_language(cli_lang)
+        return set_language(cli_lang, explicit=True)
+    if _EXPLICIT:                       # 命令行已经定过，别被配置盖掉
+        return _LANG
     lang = ""
     if config_path and os.path.exists(config_path):
         try:
@@ -229,3 +261,93 @@ def resolve_language(config_path: str = "", cli_lang: str = "") -> str:
         except Exception:                   # noqa: BLE001
             lang = ""
     return set_language(lang)
+
+
+#: 英文译文 → 中文原文。界面切换语言时要把控件上现有的旧文本换掉，
+#: 手上只有"当前显示的字"，需要靠它倒推回 key。
+_ZH_BY_EN: Dict[str, str] = {}
+for _k, _v in _EN.items():
+    _ZH_BY_EN.setdefault(_v, _k)
+
+
+def language_label(lang: Optional[str] = None) -> str:
+    """给下拉框用的显示名：中文 / English。"""
+    return "English" if (lang or _LANG) == "en" else "中文"
+
+
+def retranslate(text: str) -> str:
+    """把控件上已有的文本切换到当前语言；不属于词表的原样返回。
+
+    两种输入都接受：
+      - 中文原文（刚建好界面时）
+      - 上一次翻译出来的英文（再次切换时）
+    """
+    if not text:
+        return text
+    if text in _EN:
+        zh = text
+    else:
+        zh = _ZH_BY_EN.get(text, "")
+        if not zh:
+            return text
+    return _EN.get(zh, zh) if _LANG == "en" else zh
+
+
+def save_language(config_path: str, lang: str) -> bool:
+    """把语言写回 config.yaml 的 ui.language，保留注释与原有排版。
+
+    失败（文件只读、格式异常）不抛异常，只返回 False —— 界面上切换语言
+    不该因为写配置失败而中断。
+    """
+    lang = "en" if str(lang or "").lower().startswith("en") else "zh"
+    if not config_path or not os.path.isfile(config_path):
+        return False
+    try:
+        with open(config_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return False
+
+    out = []
+    in_ui = False
+    wrote = False
+    for line in lines:
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+
+        if stripped.startswith("ui:"):
+            in_ui = True
+            out.append(line)
+            continue
+        # 顶层新键（顶格且不是注释）意味着 ui 段结束
+        if in_ui and stripped and indent == 0 and not stripped.startswith("#"):
+            if not wrote:
+                out.append(f"  language: {lang}\n")
+                wrote = True
+            in_ui = False
+
+        if in_ui and indent > 0 and stripped.startswith("language:"):
+            # 保留行尾注释与原有对齐，别把 `language: zh  # zh/en` 的说明写没了
+            idx = line.find("#")
+            gap, tail = "", ""
+            if idx >= 0:
+                tail = line[idx:].rstrip("\r\n")
+                gap = line[:idx]
+                gap = gap[len(gap.rstrip()):] or "        "
+            out.append(f"  language: {lang}{gap}{tail}\n")
+            wrote = True
+            continue
+        out.append(line)
+
+    if not wrote:
+        if in_ui:                       # ui 段在文件末尾
+            out.append(f"  language: {lang}\n")
+        else:
+            out.append("\nui:\n  language: %s\n" % lang)
+
+    try:
+        with open(config_path, "w", encoding="utf-8") as fh:
+            fh.writelines(out)
+    except OSError:
+        return False
+    return True

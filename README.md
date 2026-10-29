@@ -21,6 +21,7 @@
 2. 用 7-Zip 右键第一卷 → **提取到当前位置**，得到 `StereoCamera` 文件夹。**不要只拷 exe。**
 3. 确认机器有 NVIDIA 显卡与较新驱动（需支持 CUDA 12.8），接上双目相机。
 4. 双击 `StereoCamera.exe` → 打开主界面 Stereo Viewer → 点右上角「开始串流」→ 在 `2D` 标签勾选「深度」或切到 `3D` 看点云。
+5. 界面右上角的 `界面语言` 可在 **中文 / English** 之间即时切换；也可用 `--lang en` 启动，或改 `config.yaml` 的 `ui.language`。
 
 完整说明：[docs/软件使用说明.md](docs/软件使用说明.md)
 

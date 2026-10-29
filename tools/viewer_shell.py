@@ -62,7 +62,8 @@ except ImportError:
     _HAVE_PIL = False
 
 import gui_theme as theme
-from i18n import t, tf
+from i18n import (t, tf, retranslate, set_language, get_language,
+                  language_label, save_language)
 
 # 与标定工作台同一套科技黑，颜色只在 gui_theme.py 里改。
 BG = theme.BG
@@ -341,6 +342,7 @@ class ViewerApp(tk.Tk):
         self.status_var = tk.StringVar(value=t("未连接"))
         self.device_var = tk.StringVar(value=t("双目深度相机"))
         self.meta_var = tk.StringVar(value=t("分辨率 —    帧率 —"))
+        self.lang_var = tk.StringVar(value=language_label())
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -397,6 +399,74 @@ class ViewerApp(tk.Tk):
                       fg=ON_ACCENT if on else TEXT,
                       activeforeground=ON_ACCENT if on else TEXT)
 
+    # ------------------------------------------------------------------ 语言
+    def _on_language(self, _event=None) -> None:
+        """下拉框切换语言：重写整窗文案，并把选择写回 config.yaml。"""
+        want = "en" if str(self.lang_var.get()).lower().startswith("en") else "zh"
+        if want == get_language():
+            return
+        set_language(want)
+        self._save_language(want)
+        self._retranslate_ui()
+        self._log(t("界面语言已切换为 English") if want == "en"
+                  else t("界面语言已切换为中文"))
+
+    def _save_language(self, lang: str) -> None:
+        path = getattr(self, "config_path", "") or _find("config.yaml")
+        if not path:
+            return
+        if not save_language(path, lang):
+            self._log(tf("语言偏好没有写回 {path}", path=path))
+
+    def _retranslate_ui(self) -> None:
+        """把控件树上已有的文案按当前语言重写一遍。
+
+        不重建窗口 —— 相机连接、串流状态、已加载的模型都保留，只换字。
+        动态文本（帧率、坐标）走 tf() 生成，会在下一帧刷新时跟上。
+        """
+        def walk(widget: tk.Misc) -> None:
+            for child in widget.winfo_children():
+                try:
+                    cur = child.cget("text")
+                except Exception:               # noqa: BLE001
+                    cur = None
+                if isinstance(cur, str) and cur:
+                    new = retranslate(cur)
+                    if new != cur:
+                        try:
+                            child.configure(text=new)
+                        except Exception:       # noqa: BLE001
+                            pass
+                walk(child)
+
+        walk(self)
+
+        # 档位下拉：显示翻译后的名字，内部键不变
+        try:
+            self.preset_box.configure(values=[t(a) for a, _ in PRESET_ITEMS])
+            key = self._preset_key()
+            zh = next((a for a, k in PRESET_ITEMS if k == key), PRESET_ITEMS[0][0])
+            self.preset_var.set(t(zh))
+        except Exception:                       # noqa: BLE001
+            pass
+
+        # 这几个走 StringVar，不在控件树上
+        self.status_var.set(retranslate(self.status_var.get()))
+        self.device_var.set(retranslate(self.device_var.get()))
+        self.meta_var.set(retranslate(self.meta_var.get()))
+        self.lang_var.set(language_label())
+
+        # 视图标题与空态提示由 _paint_view 统一生成
+        self._view_dirty = True
+        try:
+            self._paint_view()
+        except Exception:                       # noqa: BLE001
+            pass
+        try:
+            self._refresh_results()
+        except Exception:                       # noqa: BLE001
+            pass
+
     def _build(self) -> None:
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -415,6 +485,15 @@ class ViewerApp(tk.Tk):
                  font=self._f(9)).pack(side="left", padx=(16, 0))
         self.btn_stream = self._button(top, t("开始串流"), self._toggle_stream, primary=True)
         self.btn_stream.pack(side="right", padx=14, pady=10)
+
+        # 语言选择器：中文 / English。切换后整窗重取文案，不重建窗口
+        self.lang_box = ttk.Combobox(top, textvariable=self.lang_var, state="readonly",
+                                     values=("中文", "English"), width=8, font=self._f(9))
+        self.lang_box.pack(side="right", pady=10)
+        self.lang_box.bind("<<ComboboxSelected>>", self._on_language)
+        self.lang_title = tk.Label(top, text=t("界面语言"), bg=TOP, fg=MUTED,
+                                   font=self._f(9))
+        self.lang_title.pack(side="right", padx=(10, 6))
 
         body = tk.Frame(self, bg=SEAM)
         body.grid(row=1, column=0, sticky="nsew")
@@ -486,6 +565,7 @@ class ViewerApp(tk.Tk):
                            values=[t(a) for a, _ in PRESET_ITEMS], width=12, font=self._f(9))
         box.pack(anchor="w", padx=14, pady=(0, 4))
         box.bind("<<ComboboxSelected>>", self._on_preset)
+        self.preset_box = box
         tk.Label(ctrl, text=t("切换档位会重新加载模型，大约需要几秒。\n滑条只改显示范围，近处为红色，远处为蓝色。"),
                  bg=SIDE, fg=MUTED, font=self._f(8), wraplength=260, justify="left"
                  ).pack(fill="x", padx=14, pady=(0, 8))
@@ -543,7 +623,7 @@ class ViewerApp(tk.Tk):
         self.btn_2d.pack(side="left", padx=(10, 4), pady=6)
         self.btn_3d = self._button(bar, "3D", lambda: self._set_mode("3d"))
         self.btn_3d.pack(side="left", padx=4, pady=6)
-        self.view_title = tk.Label(bar, text="彩色  |  深度", bg=TOP, fg=TEXT, font=self._f(10))
+        self.view_title = tk.Label(bar, text=t("彩色") + "  |  " + t("深度"), bg=TOP, fg=TEXT, font=self._f(10))
         self.view_title.pack(side="left", padx=12)
         self.btn_back = self._button(bar, t("回到实时"), self._clear_review)
         self.btn_pause = self._button(bar, t("暂停"), self._toggle_pause)
@@ -779,7 +859,8 @@ class ViewerApp(tk.Tk):
                     image="",
                     text=t("尚未串流\n\n右上角开始串流，查看彩色、深度和点云\n保存的采集与快照在右侧点选即可回看"))
             else:
-                self.view.configure(image="", text="没有可显示的画面\n在左侧勾选彩色、深度或视差，或切到 3D")
+                self.view.configure(image="",
+                                    text=t("没有可显示的画面\n在左侧勾选彩色、深度或视差，或切到 3D"))
             self._view_dirty = False
             return
         if not _HAVE_PIL:
@@ -1039,11 +1120,12 @@ class ViewerApp(tk.Tk):
         self.status_var.set(t("已停止"))
         self.meta_var.set(t("分辨率 —    帧率 —"))
         self._photo = None
-        self.view.configure(image="", text="串流已停止\n\n右上角可以再次开始\n右侧结果仍可点开回看")
+        self.view.configure(image="",
+                            text=t("串流已停止\n\n右上角可以再次开始\n右侧结果仍可点开回看"))
         if err:
-            self._log("停止时出错：" + err)
+            self._log(tf("停止时出错：{exc}", exc=err))
         else:
-            self._log("串流已停止")
+            self._log(t("串流已停止"))
         if self._pending_calib:
             self._pending_calib = False
             self._spawn_calib()
@@ -1159,7 +1241,7 @@ class ViewerApp(tk.Tk):
         except Exception as exc:  # noqa: BLE001
             self._log(f"打不开标定工作台：{exc}")
             return
-        self._log("已打开标定工作台。采集、标定、检查、保存都在那个窗口里。")
+        self._log(t("已打开标定工作台。采集、标定、检查、保存都在那个窗口里。"))
         self.status_var.set(t("标定工作台已打开"))
         self.after(600, self._poll_calib)
 
@@ -1200,12 +1282,12 @@ class ViewerApp(tk.Tk):
     def _calib_summary(self) -> str:
         path = _find("calibration/stereo_calib.yaml")
         if not os.path.isfile(path):
-            return "当前没有生效的标定。\n打开标定工作台，完成采集、标定并保存后，这里会显示基线和 RMS。"
+            return t("当前没有生效的标定。\n打开标定工作台，完成采集、标定并保存后，这里会显示基线和 RMS。")
         try:
             from calibration import StereoCalibration
             cal = StereoCalibration.load(path)
         except Exception as exc:  # noqa: BLE001
-            return f"标定文件读不了：\n{exc}\n{path}"
+            return tf("标定文件读不了：\n{exc}\n{path}", exc=exc, path=path)
         date = ""
         try:
             import yaml
@@ -1216,7 +1298,7 @@ class ViewerApp(tk.Tk):
             date = ""
         lines = [
             os.path.basename(path),
-            tf("日期      {date}", date=date or "未知"),
+            tf("日期      {date}", date=date or t("未知")),
             tf("图像      {w} x {h}", w=cal.image_size[0], h=cal.image_size[1]),
             tf("基线      {mm:.2f} mm", mm=cal.baseline_mm),
             tf("双目 RMS  {rms:.3f} px", rms=cal.rms_stereo),
@@ -1246,7 +1328,7 @@ class ViewerApp(tk.Tk):
         if not sel or sel[0] >= len(self._result_paths):
             return
         path = self._result_paths[sel[0]]
-        self._log("正在读取 " + os.path.basename(path))
+        self._log(tf("正在读取 {name}", name=os.path.basename(path)))
         threading.Thread(target=self._load_review, args=(path,), daemon=True).start()
 
     def _load_review(self, path: str) -> None:
@@ -1271,7 +1353,7 @@ class ViewerApp(tk.Tk):
         try:
             os.startfile(path)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
-            self._log(f"打不开目录：{exc}")
+            self._log(tf("打不开目录：{exc}", exc=exc))
 
     def _run_selftest(self) -> None:
         if self.busy:
@@ -1338,13 +1420,18 @@ class ViewerApp(tk.Tk):
                 if self.live_frame is not None:
                     eye = f"{self.live_frame.left.shape[1]}x{self.live_frame.left.shape[0]}"
                 med = float(st.get("median_m") or 0.0)
-                self.meta_var.set(
-                    f"{eye or '—'}    采集 {float(st.get('capture_fps') or 0):.1f} fps"
-                    f"    推理 {float(st.get('infer_fps') or 0):.2f} fps"
-                    f"    中位 {med:.3f} m    {st.get('preset') or ''}")
-                self.dev_sub.configure(
-                    text=f"{eye or '分辨率未知'}    有效 {float(st.get('valid_ratio') or 0):.0f}%"
-                         f"    点数 {int(st.get('points') or 0)}")
+                self.meta_var.set(tf(
+                    "{eye}    采集 {cap:.1f} fps    推理 {inf:.2f} fps"
+                    "    中位 {med:.3f} m    {preset}",
+                    eye=eye or "—",
+                    cap=float(st.get("capture_fps") or 0),
+                    inf=float(st.get("infer_fps") or 0),
+                    med=med, preset=st.get("preset") or ""))
+                self.dev_sub.configure(text=tf(
+                    "{eye}    有效 {valid:.0f}%    点数 {pts}",
+                    eye=eye or t("分辨率未知"),
+                    valid=float(st.get("valid_ratio") or 0),
+                    pts=int(st.get("points") or 0)))
             except Exception as exc:  # noqa: BLE001
                 self._log(f"刷新画面失败：{exc}")
         if self._view_dirty and not self.paused:
@@ -1552,9 +1639,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--selftest", action="store_true", help="只建界面并画一帧测试图，然后退出")
     ap.add_argument("--lang", default="", choices=("", "zh", "en"), help="界面语言 zh / en")
     args = ap.parse_args(argv)
-    if args.lang:
-        import i18n
-        i18n.set_language(args.lang)
+    # 命令行优先；否则读 config.yaml 的 ui.language（app_entry 里可能已经定过）
+    import i18n
+    i18n.resolve_language(_find("config.yaml"), args.lang)
     if args.selftest:
         scale = 1.0
     else:

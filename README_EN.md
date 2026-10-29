@@ -20,8 +20,9 @@ disparity/depth inference, colored point clouds, stereo calibration, and a Pytho
 4. Double-click `StereoCamera.exe` → the **Stereo Viewer** opens → click **Start streaming**
    at the top right → use **2D** (Color/Depth/Disparity) or **3D** (point cloud).
 
-The UI is available in Chinese and English. Set `ui.language: en` in `config.yaml`, or launch
-with `--lang en`.
+The UI is available in Chinese and English. Use the **Language** dropdown at the top right of
+the viewer to switch instantly, or set `ui.language: en` in `config.yaml`, or launch with
+`--lang en`.
 
 ### Option B — run from source
 

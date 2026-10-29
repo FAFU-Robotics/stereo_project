@@ -24,12 +24,26 @@ Only one entry can stream at a time. Stop streaming before handing the camera ov
 | Right middle | Captures & snapshots list, Refresh, Open folder |
 | Right bottom | Notifications |
 | Top right | **Start streaming** / **Stop streaming** |
+| Top right | `Language` selector (中文 / English) |
 
 ### Streaming
 
 1. Click **Start streaming**. Status: Connecting → Streaming, with resolution and FPS.
 2. The inference model loads the first time you open Depth or Point cloud (a few seconds).
 3. **Stop streaming** releases the camera; closing the window also releases it.
+
+### Language
+
+The **`Language`** dropdown at the top right switches the whole window between
+Chinese and English:
+
+- the change is applied immediately — no restart, and an active stream keeps running;
+- the choice is written back to `ui.language` in `config.yaml` and used on the next launch;
+- `StereoCamera.exe --lang en` overrides the config for one session.
+
+> The calibration console (the four-page workflow) is Chinese-only for now.
+> Low-level libraries may still return error text in Chinese; it is shown verbatim
+> in the Notifications panel.
 
 ### Views and mouse
 

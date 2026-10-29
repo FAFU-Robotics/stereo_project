@@ -60,6 +60,7 @@ hiddenimports = [
     "calib_manage",
     "gui_state",
     "gui_theme",
+    "i18n",
     "viewer_shell",
     "stereo_sdk",
     "stereo_sdk.session",
