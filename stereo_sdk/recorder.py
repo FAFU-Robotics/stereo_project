@@ -77,7 +77,8 @@ class Recorder:
         if self.save_images and result.frame is not None:
             for name, img in (("left_raw.png", result.frame.left), ("right_raw.png", result.frame.right)):
                 p = os.path.join(d, name)
-                cv2.imwrite(p, img)
+                from depth_utils import imwrite_image
+                imwrite_image(p, img)
                 files.append(name)
         if self.save_disparity:
             np.save(os.path.join(d, "disparity.npy"), result.disparity)

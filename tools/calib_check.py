@@ -410,7 +410,8 @@ def render_all(calib: Any, frames_dir: str, spec: Any,
         os.makedirs(out_dir, exist_ok=True)
         for name, img in images.items():
             p = os.path.join(out_dir, f"check_{name}_{best_i:02d}.png")
-            if cv2.imwrite(p, img):
+            from depth_utils import imwrite_image
+            if imwrite_image(p, img):
                 saved.append(p)
         with open(os.path.join(out_dir, "check_region_stats.txt"), "w", encoding="utf-8") as fh:
             fh.write(region_stats_text(stats) + "\n\n" + alpha_text(panel) + "\n")

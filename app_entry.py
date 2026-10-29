@@ -11,7 +11,7 @@
     没有统一入口时，只能打三个 EXE，或者打一个"只有 GUI"的 EXE。
     这里用一个入口 + 子命令覆盖前两者，产物仍然只有一个 exe：
 
-        StereoApp.exe                    → 标定 GUI（默认，不需要 torch）
+        StereoApp.exe                    → Stereo Viewer（默认，不需要先开相机）
         StereoApp.exe --mode depth       → 实时深度（需要 torch + 权重）
         StereoApp.exe --mode pointcloud  → 实时点云（需要 open3d）
         StereoApp.exe --where            → 打印路径解析结果（排错第一条命令）
@@ -34,7 +34,7 @@
        → 装 sys.excepthook，写 logs/ 并尽量弹窗。
 
 【用法】
-    python app_entry.py                       # 源码运行 GUI
+    python app_entry.py                       # 打开 Stereo Viewer
     python app_entry.py --where               # 看路径解析
     python app_entry.py --selftest            # 自检
     python app_entry.py --mode depth --scale 0.5   # 其余参数原样转给 main.py
@@ -50,12 +50,46 @@ if str(_os.environ.get("TORCHDYNAMO_DISABLE", "")).strip() not in ("1", "true", 
     _os.environ["TORCHDYNAMO_DISABLE"] = "1"
 # 同一类问题的另一个开关：某些 torch 版本在没有 Triton 时会尝试走 inductor
 _os.environ.setdefault("TORCHINDUCTOR_DISABLE", "1")
+# numpy 与 torch 各带一份 OpenMP 时，Windows 上会直接中止进程
+_os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+_os.environ.setdefault("PYTHONUTF8", "1")
+_os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 import argparse
 import datetime as _dt
 import sys
 import traceback
-from typing import Any, List, Optional, TextIO
+from typing import Any, Dict, List, Optional, TextIO
+
+
+def _prepare_frozen_runtime() -> None:
+    """冻结运行时：切到 exe 目录，并把 CUDA / OpenCV 的 DLL 目录加进搜索路径。
+
+    双击 EXE 时，Windows 的工作目录不一定是 exe 所在目录（快捷方式、资源管理器
+    从别的文件夹启动都可能如此）。先 chdir，相对路径才不会漂。
+    torch 的 cublas/cudnn 在 torch/lib 里，不在系统 PATH；不注册这个目录，
+    打包后第一次 import torch 就会报找不到 DLL。显卡驱动本身不在包里。
+    """
+    if not bool(getattr(sys, "frozen", False)):
+        return
+    exe_directory = _os.path.dirname(_os.path.abspath(sys.executable))
+    try:
+        _os.chdir(exe_directory)
+    except OSError:
+        pass
+    base = getattr(sys, "_MEIPASS", exe_directory)
+    for sub in ("", "torch/lib", "torchvision", "cv2", "numpy.libs", "open3d", "open3d/cpu"):
+        folder = base if not sub else _os.path.join(base, sub)
+        if not folder or not _os.path.isdir(folder):
+            continue
+        try:
+            _os.add_dll_directory(folder)
+        except (OSError, AttributeError):
+            pass
+        _os.environ["PATH"] = folder + _os.pathsep + _os.environ.get("PATH", "")
+
+
+_prepare_frozen_runtime()
 
 APP_TITLE = "双目深度相机 · 标定与实时工具"
 
@@ -92,25 +126,48 @@ def _bootstrap_syspath() -> None:
                 sys.path.insert(0, p)
 
 
-class _StreamTee:
-    """把 print 重定向到日志文件（windowed 模式下 sys.stdout 是 None）。"""
+class _SafeStream:
+    """同时写日志和原控制台，并且永远不因编码失败抛异常。
 
-    def __init__(self, fh: TextIO) -> None:
-        self._fh = fh
+    中文 Windows 的控制台是 GBK。自检里如果打印 ✅/❌，GBK 编不了，
+    print 会抛 UnicodeEncodeError，异常处理里再打印一次就连对话框也出两层。
+    """
+
+    def __init__(self, underlying: Optional[TextIO], log_fh: Optional[TextIO]) -> None:
+        self._u = underlying
+        self._log = log_fh
 
     def write(self, s: str) -> int:
+        text = "" if s is None else str(s)
+        if self._log is not None:
+            try:
+                self._log.write(text)
+                self._log.flush()
+            except Exception:  # noqa: BLE001
+                pass
+        stream = self._u
+        if stream is None:
+            return len(text)
         try:
-            self._fh.write(s)
-            self._fh.flush()
-        except Exception:      # noqa: BLE001 —— 日志失败绝不能影响主流程
+            stream.write(text)
+        except UnicodeEncodeError:
+            enc = getattr(stream, "encoding", None) or "mbcs"
+            try:
+                stream.write(text.encode(enc, errors="replace").decode(enc, errors="replace"))
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
             pass
-        return len(s or "")
+        return len(text)
 
     def flush(self) -> None:
-        try:
-            self._fh.flush()
-        except Exception:      # noqa: BLE001
-            pass
+        for stream in (self._log, self._u):
+            if stream is None:
+                continue
+            try:
+                stream.flush()
+            except Exception:  # noqa: BLE001
+                pass
 
     def isatty(self) -> bool:
         return False
@@ -127,10 +184,10 @@ def setup_streams() -> Optional[TextIO]:
         fh = open(path, "a", encoding="utf-8", buffering=1)
         fh.write(f"\n{'=' * 70}\n[{_dt.datetime.now():%Y-%m-%d %H:%M:%S}] 启动 v{APP_VERSION}\n")
         fh.write(app_paths.describe_text() + "\n")
-        if sys.stdout is None or getattr(sys.stdout, "closed", False):
-            sys.stdout = _StreamTee(fh)      # type: ignore[assignment]
-        if sys.stderr is None or getattr(sys.stderr, "closed", False):
-            sys.stderr = _StreamTee(fh)      # type: ignore[assignment]
+        out = None if sys.stdout is None or getattr(sys.stdout, "closed", False) else sys.stdout
+        err = None if sys.stderr is None or getattr(sys.stderr, "closed", False) else sys.stderr
+        sys.stdout = _SafeStream(out, fh)    # type: ignore[assignment]
+        sys.stderr = _SafeStream(err, fh)    # type: ignore[assignment]
         return fh
     except OSError:
         return None
@@ -244,6 +301,102 @@ def _run_cli(mode: str, extra: List[str]) -> int:
     return int(cli.main(argv) or 0)
 
 
+def _model_selftest() -> int:
+    """不连相机：加载权重，对一对合成图推理一帧。用来确认打包后的 GPU 链路。"""
+    _bootstrap_syspath()
+    import app_paths
+    from main import load_config
+    from stereo_depth import FFSDepthEstimator
+
+    cfg_path = app_paths.find("config.yaml")
+    print(f"  config = {cfg_path}")
+    if not _os.path.isfile(cfg_path):
+        print("  [FAIL] 找不到 config.yaml")
+        return 1
+    cfg = load_config(cfg_path)
+    calib = app_paths.find("calibration/stereo_calib.yaml")
+    weights = app_paths.find("weights/23-36-37/model_best_bp2_serialize.pth")
+    repo = str(cfg.get("project", {}).get("ffs_repo", ""))
+    print(f"  calib  = {calib}  exists={_os.path.isfile(calib)}")
+    print(f"  weights= {weights}  exists={_os.path.isfile(weights)}")
+    print(f"  ffs    = {repo}  exists={_os.path.isdir(repo)}")
+    est = FFSDepthEstimator(cfg["project"], cfg.get("ffs", {}))
+    ok, msg = est.weights_ready()
+    print(f"  [权重] {msg}")
+    if not ok:
+        return 3
+    try:
+        est.load()
+        import numpy as np
+        left = np.zeros((480, 640, 3), np.uint8)
+        left[:, :] = (40, 80, 120)
+        right = left.copy()
+        est.warmup(1, left=left, right=right)
+        out = est.infer(left, right)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [FAIL] 模型自检失败：{type(exc).__name__}: {exc}")
+        return 4
+    finally:
+        try:
+            est.close()
+        except Exception:  # noqa: BLE001
+            pass
+    infer_ms = float(out["timings_ms"]["infer"])
+    print(f"  [OK] 推理完成  {infer_ms:.1f} ms  disp={tuple(out['disp'].shape)}  scale={out['scale']}")
+    return 0
+
+
+def _show_text(title: str, text: str) -> None:
+    import tkinter as tk
+    from tkinter import scrolledtext
+    win = tk.Tk()
+    win.title(title)
+    win.geometry("720x480")
+    box = scrolledtext.ScrolledText(win, wrap="word", font=("Consolas", 10))
+    box.pack(fill="both", expand=True)
+    box.insert("1.0", text)
+    box.configure(state="disabled")
+    tk.Button(win, text="关闭", command=win.destroy).pack(pady=6)
+    win.mainloop()
+
+
+def _notify_failure(rc: int) -> None:
+    """模式异常退出时给一个能看懂的提示。详细堆栈在 logs/。"""
+    import app_paths
+    log_dir = app_paths.writable_dir("logs")
+    tail = ""
+    try:
+        logs = [f for f in _os.listdir(log_dir) if f.startswith("app-") and f.endswith(".log")]
+        if logs:
+            path = _os.path.join(log_dir, sorted(logs)[-1])
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+            tail = "".join(lines[-25:])
+    except OSError:
+        path = ""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        r = tk.Tk()
+        r.withdraw()
+        messagebox.showwarning(
+            "这一项没有正常结束",
+            f"退出码 {rc}。\n\n日志目录：\n{log_dir}\n\n最近日志：\n{tail[-800:]}")
+        r.destroy()
+    except Exception:  # noqa: BLE001
+        print(tail)
+
+
+def _run_viewer(selftest: bool = False) -> int:
+    """RealSense Viewer 式主界面。标定工作台从这里再打开，不在这里 import torch。"""
+    _bootstrap_syspath()
+    if False:                               # pragma: no cover  供打包器看到这个模块
+        import viewer_shell                 # noqa: F401
+    import viewer_shell
+    argv = ["--selftest"] if selftest else []
+    return int(viewer_shell.main(argv) or 0)
+
+
 def _selftest() -> int:
     """不需要相机与 GPU 的自检：路径 + 依赖 + GUI 构建 + 版本一致性。"""
     _bootstrap_syspath()
@@ -258,11 +411,11 @@ def _selftest() -> int:
     try:
         from stereo_sdk.types import SDK_VERSION
         same = SDK_VERSION == APP_VERSION
-        print(f"  {'✅' if same else '⚠️ '} SDK_VERSION={SDK_VERSION}  APP_VERSION={APP_VERSION}")
+        print(f"  {'[OK]' if same else '[WARN]'} SDK_VERSION={SDK_VERSION}  APP_VERSION={APP_VERSION}")
         if not same:
             print("       （两者不一致不影响运行；打包脚本会以 SDK_VERSION 为准）")
     except Exception as exc:                    # noqa: BLE001
-        print(f"  ❌ 读不到 SDK_VERSION：{exc}")
+        print(f"  [FAIL] 读不到 SDK_VERSION：{exc}")
         ok = False
 
     # 2) 关键文件
@@ -271,7 +424,7 @@ def _selftest() -> int:
                       ("third_party/Fast-FoundationStereo/core/foundation_stereo.py", False)):
         p = app_paths.find(rel)
         got = _os.path.exists(p) if need else _os.path.isfile(p)
-        mark = "✅" if got else ("❌" if need else "⚠️ ")
+        mark = "[OK]" if got else ("[FAIL]" if need else "[WARN]")
         print(f"  {mark} {rel} -> {p}")
         if need:
             ok &= bool(got)
@@ -281,9 +434,9 @@ def _selftest() -> int:
                       ("tkinter", True), ("PIL", False), ("torch", False)):
         try:
             __import__(mod)
-            print(f"  ✅ {mod}")
+            print(f"  [OK] {mod}")
         except Exception as exc:                # noqa: BLE001
-            print(f"  {'❌' if need else '⚠️ '} {mod} 未安装（{type(exc).__name__}）")
+            print(f"  {'[FAIL]' if need else '[WARN]'} {mod} 未安装（{type(exc).__name__}）")
             if need:
                 ok = False
 
@@ -292,9 +445,9 @@ def _selftest() -> int:
         import torch
         cuda = bool(torch.cuda.is_available())
         name = torch.cuda.get_device_name(0) if cuda else "-"
-        print(f"  {'✅' if cuda else '⚠️ '} CUDA 可用={cuda}  设备={name}  torch={torch.__version__}")
+        print(f"  {'[OK]' if cuda else '[WARN]'} CUDA 可用={cuda}  设备={name}  torch={torch.__version__}")
     except Exception:                           # noqa: BLE001
-        print("  ⚠️  未安装 torch：仅 GUI 与标定可用，实时深度/点云不可用")
+        print("  [WARN] 未安装 torch：仅 GUI 与标定可用，实时深度/点云不可用")
 
     # 5) GUI 能否构建（不连相机）
     try:
@@ -302,12 +455,12 @@ def _selftest() -> int:
         r = tk.Tk()
         r.withdraw()
         r.destroy()
-        print("  ✅ tkinter 可建窗口")
+        print("  [OK] tkinter 可建窗口")
     except Exception as exc:                    # noqa: BLE001
-        print(f"  ❌ tkinter 建窗口失败：{exc}")
+        print(f"  [FAIL] tkinter 建窗口失败：{exc}")
         ok = False
 
-    print("\n" + ("✅ 自检通过" if ok else "❌ 自检有失败项"))
+    print("\n" + ("[OK] 自检通过" if ok else "[FAIL] 自检有失败项"))
     return 0 if ok else 1
 
 
@@ -325,15 +478,24 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
         prog="stereo-app", add_help=True,
         description=APP_TITLE,
         epilog="其余未识别参数会原样转给 main.py（例如 --scale 0.5 --threaded on）。")
-    ap.add_argument("--gui", action="store_true", help="启动标定 GUI（默认行为）")
+    ap.add_argument("--gui", action="store_true",
+                    help="启动标定工作台（四页流程）；不带参数时默认进主界面 Stereo Viewer")
     ap.add_argument("--mode", choices=("gui",) + CLI_MODES, default="gui",
-                    help="gui=标定界面；其余三种进实时链路（需要 torch）")
+                    help="gui=主界面/标定；其余三种进实时链路（需要 torch）")
     ap.add_argument("--config", default="", help="改用别的 config.yaml")
     ap.add_argument("--where", action="store_true", help="打印路径解析结果后退出")
     ap.add_argument("--version", action="store_true", help="打印版本后退出")
     ap.add_argument("--selftest", action="store_true", help="环境自检（不需要相机）")
     ap.add_argument("--gui-selftest", action="store_true",
-                    help="只把 GUI 建出来再自动关掉（验证界面能在本机启动）")
+                    help="只把主界面（Stereo Viewer）建出来再自动关掉")
+    ap.add_argument("--calib-selftest", action="store_true",
+                    help="只把旧版标定工作台建出来再自动关掉")
+    ap.add_argument("--launcher", action="store_true",
+                    help="打开 Stereo Viewer（打包后的 EXE 双击时默认就是这个）")
+    ap.add_argument("--viewer-selftest", action="store_true",
+                    help="只把 Viewer 建出来再自动关掉")
+    ap.add_argument("--model-selftest", action="store_true",
+                    help="不连相机，只加载权重并对合成图推理一帧")
     # parse_known_args：让 main.py 的 --scale/--threaded/--list 等参数照样能用
     args, extra = ap.parse_known_args(raw)
 
@@ -356,11 +518,28 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     if args.selftest:
         return _selftest()
 
+    if args.model_selftest:
+        return _model_selftest()
+
+    if args.viewer_selftest:
+        return _run_viewer(selftest=True)
+
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    # 不带参数（源码或双击 EXE）打开 Viewer。--gui 仍直接进标定工作台，
+    # Viewer 里的「标定工作台」按钮走的就是这条，避免再套一层窗口。
     if args.config:
         extra = ["--config", args.config] + extra
 
+    open_viewer = (not args.gui and not args.gui_selftest and not args.calib_selftest
+                   and args.mode == "gui" and (args.launcher or not extra))
     try:
+        if open_viewer:
+            return _run_viewer()
         if args.gui_selftest:
+            return _run_viewer(selftest=True)
+        if args.calib_selftest:
             return _run_gui(extra, gui_selftest=True)
         if args.mode == "gui" or args.gui:
             return _run_gui(extra)

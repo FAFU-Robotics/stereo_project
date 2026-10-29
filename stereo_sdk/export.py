@@ -24,9 +24,9 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional, Sequence
 
-import cv2
 import numpy as np
 
+from depth_utils import imwrite_image
 from .types import DepthResult
 
 __all__ = [
@@ -100,7 +100,7 @@ def save_depth_png(path: str, depth: np.ndarray, valid: Optional[np.ndarray] = N
         mm = np.where(np.asarray(valid, bool), mm, 0.0)
     out = np.round(mm).astype(np.uint16)
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-    if not cv2.imwrite(path, out):
+    if not imwrite_image(path, out):
         raise IOError(f"写 PNG 失败：{path}")
     return path
 
@@ -121,7 +121,7 @@ def save_depth_tiff(path: str, depth: np.ndarray) -> str:
             "写 TIFF 需要 imagecodecs：pip install imagecodecs\n"
             "（不想装的话用 save_depth_npy 或 save_depth_png）") from exc
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-    if not cv2.imwrite(path, np.asarray(depth, np.float32)):
+    if not imwrite_image(path, np.asarray(depth, np.float32)):
         raise IOError(f"写 TIFF 失败：{path}")
     return path
 
@@ -135,7 +135,7 @@ def save_disparity_png(path: str, disparity: np.ndarray, fixed_scale: float = 32
     d = np.clip(np.asarray(disparity, np.float32), 0, 65535.0 / fixed_scale)
     out = np.round(d * float(fixed_scale)).astype(np.uint16)
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-    if not cv2.imwrite(path, out):
+    if not imwrite_image(path, out):
         raise IOError(f"写 PNG 失败：{path}")
     return path
 
@@ -149,7 +149,7 @@ def save_disparity_npy(path: str, disparity: np.ndarray) -> str:
 def save_valid_mask(path: str, valid: np.ndarray) -> str:
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     out = (np.asarray(valid, bool).astype(np.uint8) * 255)
-    if not cv2.imwrite(path, out):
+    if not imwrite_image(path, out):
         raise IOError(f"写 PNG 失败：{path}")
     return path
 
@@ -172,9 +172,9 @@ def export_result(result: DepthResult, out_dir: str, prefix: str = "frame",
         return os.path.join(out_dir, f"{prefix}.{ext}")
 
     if result.frame is not None:
-        cv2.imwrite(p("left.png"), result.frame.left)
+        imwrite_image(p("left.png"), result.frame.left)
         out["left"] = p("left.png")
-        cv2.imwrite(p("right.png"), result.frame.right)
+        imwrite_image(p("right.png"), result.frame.right)
         out["right"] = p("right.png")
     if result.disparity is not None and np.size(result.disparity):
         out["disparity_npy"] = save_disparity_npy(p("disparity.npy"), result.disparity)

@@ -116,7 +116,7 @@ class StereoViewer:
 
     def __init__(
         self,
-        window_name: str = "stereo_project",
+        window_name: str = "Stereo Viewer",
         display_scale: float = 1.0,
         show_help: bool = True,
     ) -> None:
@@ -161,6 +161,18 @@ class StereoViewer:
             cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
         cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
 
+    def _tile(self, img: np.ndarray, title: str, extra: Sequence[str] = ()) -> np.ndarray:
+        """单路画面：顶上一条深色标题（流名称 + 分辨率），画面本身不再盖字。"""
+        h, w = img.shape[:2]
+        head = np.full((28, w, 3), 28, dtype=np.uint8)
+        cv2.line(head, (0, 27), (w, 27), (90, 90, 90), 1)
+        self._put_text(head, str(title)[:42], (8, 19), (235, 235, 235), 0.5, 1, shadow=False)
+        if extra:
+            side = str(extra[0])[:28]
+            self._put_text(head, side, (max(8, w - 8 - int(9 * len(side))), 19),
+                           (170, 170, 170), 0.45, 1, shadow=False)
+        return np.vstack([head, img])
+
     def _decorate(
         self,
         img: np.ndarray,
@@ -196,7 +208,7 @@ class StereoViewer:
         if not panels:
             return -1
 
-        # 统一高度（防止不同面板的高度不一致导致 hconcat 失败）
+        # 统一高度后做成 RealSense 那种「标题条 + 画面」磁贴，中间留深色缝
         max_h = max(p[1].shape[0] for p in panels)
         rows: List[np.ndarray] = []
         for title, img, extra in panels:
@@ -206,28 +218,35 @@ class StereoViewer:
             if canvas.shape[0] < max_h:
                 pad = np.zeros((max_h - canvas.shape[0], canvas.shape[1], 3), dtype=canvas.dtype)
                 canvas = np.vstack([canvas, pad])
-            rows.append(self._decorate(canvas, title, extra))
+            rows.append(self._tile(canvas, title, extra))
 
-        frame = np.hstack(rows)
+        gap_h = rows[0].shape[0]
+        gap = np.full((gap_h, 8, 3), 18, dtype=np.uint8)
+        pieces: List[np.ndarray] = []
+        for i, row in enumerate(rows):
+            if i:
+                pieces.append(gap)
+            pieces.append(row)
+        frame = np.hstack(pieces)
+        margin = np.full((frame.shape[0], 8, 3), 18, dtype=np.uint8)
+        frame = np.hstack([margin, frame, margin])
 
-        # 暂停标记
         if paused:
-            self._put_text(frame, "PAUSED", (frame.shape[1] // 2 - 80, 40), (0, 0, 255), 1.0, 2)
+            self._put_text(frame, "PAUSED", (frame.shape[1] // 2 - 70, 22), (80, 80, 255), 0.7, 2)
 
-        # 底部状态栏（黑底 + 多行文字）
         if status_lines:
-            bar_h = 26 * len(status_lines) + 8
-            bar = np.zeros((bar_h, frame.shape[1], 3), dtype=np.uint8)
-            y = 22
+            bar_h = 22 * len(status_lines) + 10
+            bar = np.full((bar_h, frame.shape[1], 3), 16, dtype=np.uint8)
+            cv2.line(bar, (0, 0), (frame.shape[1], 0), (239, 174, 0), 2)
+            y = 18
             for line in status_lines:
-                self._put_text(bar, line, (10, y), (200, 200, 200), 0.55, 1, shadow=False)
-                y += 26
+                self._put_text(bar, line, (12, y), (210, 210, 210), 0.48, 1, shadow=False)
+                y += 22
             frame = np.vstack([frame, bar])
 
-        # 帮助行
         if self.show_help:
-            help_bar = np.zeros((28, frame.shape[1], 3), dtype=np.uint8)
-            self._put_text(help_bar, self.HELP_LINES[0], (10, 20), (0, 200, 255), 0.5, 1, shadow=False)
+            help_bar = np.full((24, frame.shape[1], 3), 16, dtype=np.uint8)
+            self._put_text(help_bar, self.HELP_LINES[0], (12, 16), (160, 160, 160), 0.45, 1, shadow=False)
             frame = np.vstack([frame, help_bar])
 
         if self.display_scale != 1.0:

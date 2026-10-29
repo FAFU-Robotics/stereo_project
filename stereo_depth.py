@@ -107,8 +107,10 @@ def _find_resource(rel: str, fallback_root: str) -> str:
     权重放在 exe 旁边（用户可自行替换/升级权重）。
     """
     try:
-        from app_paths import resource
-        return resource(rel)
+        # find() 先看可写根（exe 旁边），再看只读包内。
+        # 用户把新权重放在 exe 旁即可替换，不必改 _internal。
+        from app_paths import find
+        return find(rel)
     except Exception:                        # noqa: BLE001
         return os.path.normpath(os.path.join(fallback_root, rel))
 

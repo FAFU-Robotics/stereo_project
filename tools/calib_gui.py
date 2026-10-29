@@ -326,7 +326,7 @@ class FrameGrid(tk.Toplevel):
         # 选中态靠"底色 + 描边"两层信号：只换底色在深色下对比不够，容易看不出选中谁
         for i, c in enumerate(self._cells):
             hit = i == pos
-            bg = "#1f3b5e" if hit else theme.CARD
+            bg = theme.SELECT if hit else theme.CARD
             c.configure(background=bg,
                         highlightbackground=theme.ACCENT if hit else theme.BORDER)
             for w in c.winfo_children():
@@ -542,37 +542,44 @@ class CalibApp(tk.Tk):
         return "   ·   ".join(bits)
 
     def _build_ui(self) -> None:
-        # ---- 顶栏：标题 + 流程提示 + 依赖版本
-        head = tk.Frame(self, background=theme.BG)
-        head.pack(side="top", fill="x", padx=12, pady=(10, 0))
-        tk.Label(head, text="双目标定工作台", background=theme.BG, foreground=theme.TEXT,
-                 font=theme.font(14, True)).pack(side="left")
-        tk.Label(head, text="① 采集　→　② 标定　→　③ 检查　→　④ 保存",
-                 background=theme.BG, foreground=theme.MUTED,
-                 font=theme.font(9)).pack(side="left", padx=(14, 0))
-        self.lbl_dep = tk.Label(head, text=self._dep_text(), background=theme.BG,
+        # ---- 顶栏：和主界面同一套标记 + 青线，流程提示留在标题右侧
+        head = tk.Frame(self, background=theme.TOP)
+        head.pack(side="top", fill="x")
+        row = tk.Frame(head, background=theme.TOP)
+        row.pack(fill="x", padx=16, pady=10)
+        theme.brand_mark(row, theme.TOP).pack(side="left", padx=(0, 10))
+        tk.Label(row, text="STEREO", background=theme.TOP, foreground=theme.ACCENT,
+                 font=theme.font(13, True)).pack(side="left")
+        tk.Label(row, text="标定工作台", background=theme.TOP, foreground=theme.TEXT,
+                 font=theme.font(13, True)).pack(side="left", padx=(8, 0))
+        tk.Label(row, text="① 采集    →    ② 标定    →    ③ 检查    →    ④ 保存",
+                 background=theme.TOP, foreground=theme.MUTED,
+                 font=theme.font(9)).pack(side="left", padx=(16, 0))
+        self.lbl_dep = tk.Label(row, text=self._dep_text(), background=theme.TOP,
                                 foreground=theme.MUTED, font=theme.font(9))
         self.lbl_dep.pack(side="right")
         # 打包成 EXE 后没有控制台，"东西到底存到哪了"只能靠这个按钮自查
-        ttk.Button(head, text="环境信息", style="Ghost.TButton", width=0,
+        ttk.Button(row, text="环境信息", style="Ghost.TButton", width=0,
                    command=self._show_env).pack(side="right", padx=(0, 8))
-        theme.hline(self, pady=(8, 0))
+        tk.Frame(self, background=theme.ACCENT, height=2, bd=0,
+                 highlightthickness=0).pack(side="top", fill="x")
 
         # ---- 底栏先 pack：底部状态条必须在 Notebook 抢走纵向空间之前占位，
         #      否则窗口一缩小状态条会先被挤掉
-        bar = tk.Frame(self, background=theme.PANEL, bd=0, highlightthickness=1,
-                       highlightbackground=theme.BORDER)
-        bar.pack(side="bottom", fill="x", padx=12, pady=(6, 10))
+        bar = tk.Frame(self, background=theme.TOP, bd=0, highlightthickness=0)
+        bar.pack(side="bottom", fill="x")
+        tk.Frame(bar, background=theme.SEAM, height=1, bd=0,
+                 highlightthickness=0).pack(side="top", fill="x")
         # 采集进度提示（还差几张）：常驻底栏，因为它是"现在该不该停手"的唯一依据
         self.lbl_short = theme.pill(bar, self.var_short)
-        self.lbl_short.pack(side="left", padx=(8, 10), pady=6)
-        tk.Label(bar, textvariable=self.var_status, anchor="w", background=theme.PANEL,
+        self.lbl_short.pack(side="left", padx=(14, 10), pady=8)
+        tk.Label(bar, textvariable=self.var_status, anchor="w", background=theme.TOP,
                  foreground=theme.MUTED, font=theme.font(9)
                  ).pack(side="left", fill="x", expand=True, padx=(4, 8))
         self.lbl_ready = tk.Label(bar, textvariable=self.var_ready, anchor="e",
-                                  background=theme.PANEL, foreground=theme.MUTED,
+                                  background=theme.TOP, foreground=theme.MUTED,
                                   font=theme.font(9))
-        self.lbl_ready.pack(side="right", padx=(6, 10))
+        self.lbl_ready.pack(side="right", padx=(6, 14))
 
         # ---- 四页
         self.nb = ttk.Notebook(self)
@@ -713,7 +720,8 @@ class CalibApp(tk.Tk):
         ttk.Button(line1, text="浏览…", command=self._browse_dir,
                    style="Ghost.TButton").pack(side="left", padx=(6, 0))
         ttk.Checkbutton(b_src, text="固定内参（推荐：只用外参重估）",
-                        variable=self.var_fix).pack(anchor="w", pady=(8, 0))
+                        variable=self.var_fix, style="Panel.TCheckbutton"
+                        ).pack(anchor="w", pady=(8, 0))
 
         c_cal, b_cal = theme.card(head, "标定板与动作", "板参数必须与实物一致")
         c_cal.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -1035,7 +1043,7 @@ class CalibApp(tk.Tk):
             if p is not None:
                 self._on_frame(*p)
             elif self.worker.error:
-                self.var_ready.set(self.worker.error)
+                self._set_ready(self.worker.error, "bad")
         self._tick_id = self.after(30, self._tick)
 
     def destroy(self) -> None:
@@ -1145,12 +1153,18 @@ class CalibApp(tk.Tk):
             pass
         return out
 
+    def _set_ready(self, text: str, kind: str = "idle") -> None:
+        """底栏右侧状态。颜色只表达合格 / 注意 / 不合格，平时保持灰字。"""
+        self.var_ready.set(text)
+        fg = {"ok": theme.OK, "warn": theme.WARN, "bad": theme.BAD}.get(kind, theme.MUTED)
+        self.lbl_ready.configure(foreground=fg, background=theme.TOP)
+
     def _toggle_camera(self) -> None:
         if self.worker is not None:
             self.worker.stop()
             self.worker = None
             self.btn_open.configure(text="打开相机")
-            self.var_ready.set("相机已关闭")
+            self._set_ready("相机已关闭", "idle")
             return
         self.spec = core.default_spec(self.var_cols.get(), self.var_rows.get(),
                                       self.var_square.get())
@@ -1165,7 +1179,7 @@ class CalibApp(tk.Tk):
                                    cv_threads=int(perf["cv_threads"]))
         self.worker.start()
         self.btn_open.configure(text="关闭相机")
-        self.var_ready.set("相机正在打开…（首次打开约需 2~5 秒）")
+        self._set_ready("相机正在打开…（首次打开约需 2~5 秒）", "warn")
 
     def _on_frame(self, pair, res, pose, reasons, fps) -> None:
         self._last_frame = (pair, res, pose, reasons, fps)
@@ -1181,8 +1195,8 @@ class CalibApp(tk.Tk):
 
         level = res.get("level", "bad")
         tag = {"ok": "可保存", "warn": "勉强可用", "bad": "不可用"}.get(level, level)
-        self.var_ready.set(f"{tag}  |  {fps:.1f} 帧/秒  |  "
-                           f"每格 {res.get('px_per_square', 0):.1f} px")
+        self._set_ready(f"{tag}  |  {fps:.1f} 帧/秒  |  "
+                        f"每格 {res.get('px_per_square', 0):.1f} px", level)
 
         dup = False
         if pose is not None and self.session is not None:

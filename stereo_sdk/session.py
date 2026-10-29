@@ -130,8 +130,12 @@ class Session:
             return
         with open(self.config_path, "r", encoding="utf-8") as fh:
             cfg = yaml.safe_load(fh)
-        self._cfg = cfg
+        # 把 project 里的相对路径写回 cfg。校正器 / 内参读取用的是 cfg 本身，
+        # 不是 _resolve_paths 的返回值；不写回的话，工作目录不是程序目录时
+        # calibration/stereo_calib.yaml 会找不到。
         project_cfg = _resolve_paths(cfg)
+        cfg["project"] = project_cfg
+        self._cfg = cfg
 
         # 延迟导入：只有真正 start() 才需要 torch / opencv 相机模块
         from camera import StereoCamera

@@ -29,7 +29,7 @@ class CloudWindow3D:
     """一个可复用的 Open3D 点云窗口。"""
 
     def __init__(self, point_size: float = 2.0, width: int = 900, height: int = 700,
-                 window_name: str = "stereo_project point cloud") -> None:
+                 window_name: str = "3D") -> None:
         import open3d as o3d          # 延迟导入：预览/视差模式不必付这个开销
 
         self._o3d = o3d
@@ -44,6 +44,11 @@ class CloudWindow3D:
         self._vis.add_geometry(self._pcd)          # ← 只加一次
         self._opt = self._vis.get_render_option()
         self._opt.point_size = float(point_size)
+        self._opt.background_color = np.array([0.0, 0.0, 0.0])
+        try:
+            self._opt.light_on = False          # 顶点色，不打光，和 RealSense 3D 一样
+        except Exception:  # noqa: BLE001
+            pass
         self._n = 0
 
     # ------------------------------------------------------------------ 更新

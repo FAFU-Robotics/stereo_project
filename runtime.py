@@ -44,7 +44,7 @@ PROJECT_ROOT = _data_root()
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from depth_utils import colorize_depth  # noqa: E402
+from depth_utils import attach_range_bar, colorize_depth  # noqa: E402
 from profiler import Profiler           # noqa: E402
 from logger import get_logger, setup  # noqa: E402  日志落盘（稳定性③）
 
@@ -61,9 +61,10 @@ def disparity_to_bgr(disp: np.ndarray) -> np.ndarray:
     hi = float(np.percentile(d[ok], 98))
     rng = max(hi - lo, 1e-6)
     norm = np.clip((d - lo) / rng, 0, 1)
-    vis = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+    # Jet：大视差（近）偏红，小视差（远）偏蓝，和深度色标同一套
+    vis = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
     vis[~ok] = (0, 0, 0)
-    return vis
+    return attach_range_bar(vis, hi, lo, unit="px")
 
 
 class DisplayRuntime:
@@ -97,17 +98,18 @@ class DisplayRuntime:
     def _panels(self, frame: Any, res: Any) -> List[Tuple[str, np.ndarray, List[str]]]:
         panels: List[Tuple[str, np.ndarray, List[str]]] = []
         if frame is not None:
-            panels.append(("LEFT", frame.left, [f"{frame.left.shape[1]}x{frame.left.shape[0]}"]))
-            panels.append(("RIGHT", frame.right, []))
+            panels.append(("Color", frame.left, [f"{frame.left.shape[1]}x{frame.left.shape[0]}"]))
+            panels.append(("Color R", frame.right, []))
         if self.mode in ("depth", "pointcloud") and res is not None:
             if self.mode == "depth":
-                panels.append((f"DISPARITY (model {res.disparity.shape[1]}x{res.disparity.shape[0]})",
-                               disparity_to_bgr(res.disparity), []))
+                panels.append(("Disparity", disparity_to_bgr(res.disparity),
+                               [f"{res.disparity.shape[1]}x{res.disparity.shape[0]}"]))
             else:
                 zmin = float(self._params.get("zmin", 0.15) or 0.15)
                 zmax = float(self._params.get("zmax", 3.0) or 3.0)
-                panels.append((f"DEPTH (m, {zmin}..{zmax})",
-                               colorize_depth(res.depth, res.valid, zmin, zmax), []))
+                depth_vis = attach_range_bar(
+                    colorize_depth(res.depth, res.valid, zmin, zmax), zmin, zmax, unit="m")
+                panels.append(("Depth", depth_vis, [f"{zmin:.2f}-{zmax:.2f} m"]))
         return panels
 
     def _status(self, res: Any) -> List[str]:
@@ -410,7 +412,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         import yaml
         cfg = yaml.safe_load(open(a.config, encoding="utf-8"))
         from viewer import StereoViewer
-        viewer = StereoViewer(cfg.get("runtime", {}) or {})
+        rt_cfg = cfg.get("runtime") or {}
+        viewer = StereoViewer(
+            window_name=str(rt_cfg.get("window_name") or "Stereo Viewer"),
+            display_scale=float(rt_cfg.get("display_scale", 1.0) or 1.0),
+        )
     rt = DisplayRuntime(s, viewer=viewer, mode=a.mode, no_display=a.no_display,
                         max_frames=a.max_frames, duration=a.duration, perf_csv=a.perf_csv)
     rc = 2

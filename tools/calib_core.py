@@ -318,8 +318,9 @@ class CaptureSession:
         idx = self._next
         lp = os.path.join(self.dir, f"left_{idx:02d}.png")
         rp = os.path.join(self.dir, f"right_{idx:02d}.png")
-        ok_l = cv2.imwrite(lp, left)
-        ok_r = cv2.imwrite(rp, right)
+        from depth_utils import imwrite_image
+        ok_l = imwrite_image(lp, left)
+        ok_r = imwrite_image(rp, right)
         if not (ok_l and ok_r):
             raise RuntimeError(f"写入失败：{lp} / {rp}")
 

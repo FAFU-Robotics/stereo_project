@@ -126,8 +126,9 @@ def save_frame_pair(
     paths: List[str] = []
     p_left = os.path.join(out_dir, "left_raw.png")
     p_right = os.path.join(out_dir, "right_raw.png")
-    cv2.imwrite(p_left, left)
-    cv2.imwrite(p_right, right)
+    from depth_utils import imwrite_image
+    imwrite_image(p_left, left)
+    imwrite_image(p_right, right)
     paths += [p_left, p_right]
 
     depth_status = "已标定" if cfg.get("depth", {}).get("calibrated") else "未标定（仅用于流程验证，禁止用于测量）"
@@ -278,8 +279,8 @@ def run_preview(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 key = -1
             else:
                 panels = [
-                    ("LEFT (raw, unrectified)", last_left, [f"{last_left.shape[1]}x{last_left.shape[0]}"]),
-                    ("RIGHT (raw, unrectified)", last_right, [f"{last_right.shape[1]}x{last_right.shape[0]}"]),
+                    ("Color", last_left, [f"{last_left.shape[1]}x{last_left.shape[0]}"]),
+                    ("Color R", last_right, [f"{last_right.shape[1]}x{last_right.shape[0]}"]),
                 ]
                 key = viewer.show_panels(panels, status_lines=status, paused=paused)
 
@@ -348,6 +349,7 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     输入：cfg（完整配置）、args（命令行参数，可覆盖 ffs.scale/valid_iters/max_disp）
     输出：进程退出码
     """
+    from depth_utils import attach_range_bar
     from stereo_depth import FFSError, FFSDepthEstimator
     from viewer import DisparityColorizer
 
@@ -372,7 +374,7 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
         window_name=str(runtime.get("window_name", "stereo_project")),
         display_scale=float(args.display_scale if args.display_scale is not None else runtime.get("display_scale", 1.0)),
     )
-    colorizer = DisparityColorizer()
+    colorizer = DisparityColorizer(colormap=cv2.COLORMAP_JET)
 
     print("=" * 88)
     print("  阶段 3：实时视差（FFS）")
@@ -513,10 +515,7 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 break
 
             disp_vis, (lo, hi) = colorizer.colorize(last_disp)
-            # 未标定警告直接画在视差面板下方（ASCII，cv2 画不了中文）
-            warn = np.zeros((28, disp_vis.shape[1], 3), dtype=np.uint8)
-            StereoViewer._put_text(warn, "UNCALIBRATED - process validation only", (6, 20), (0, 220, 255), 0.5, 1, shadow=False)
-            disp_panel = np.vstack([disp_vis, warn])
+            disp_panel = attach_range_bar(disp_vis, hi, lo, unit="px")
 
             elapsed = max(time.perf_counter() - t_loop_start, 1e-9)
             e2e_fps = n_processed / elapsed
@@ -540,12 +539,11 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     print(f"  [帧 {n_processed}] " + " | ".join(status[:2]))
                 key = -1
             else:
-                _tag = "rectified" if rectifier is not None else "raw, unrectified"
                 panels = [
-                    (f"LEFT ({_tag})", last_left, [f"{last_left.shape[1]}x{last_left.shape[0]}"]),
-                    (f"RIGHT ({_tag})", last_right, [f"{last_right.shape[1]}x{last_right.shape[0]}"]),
-                    (f"DISPARITY (px, {'calibrated' if rectifier is not None else 'uncalibrated'})",
-                     disp_panel, []),
+                    ("Color", last_left, [f"{last_left.shape[1]}x{last_left.shape[0]}"]),
+                    ("Color R", last_right, [f"{last_right.shape[1]}x{last_right.shape[0]}"]),
+                    ("Disparity", disp_panel,
+                     ["CALIBRATED" if rectifier is not None else "UNCALIBRATED"]),
                 ]
                 key = viewer.show_panels(panels, status_lines=status, paused=paused)
 
@@ -570,7 +568,8 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     np.save(p, last_disp)
                     files.append(p)
                     p2 = os.path.join(d, "disparity_vis.png")
-                    cv2.imwrite(p2, disp_vis)
+                    from depth_utils import imwrite_image
+                    imwrite_image(p2, disp_vis)
                     files.append(p2)
                     # 视差参数必须和视差数据成套保存：
                     #   阶段 4 用 depth = fx*scale * baseline / disp 换算深度时，
@@ -617,7 +616,8 @@ def run_depth(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                     np.save(p, last_disp)
                     files.append(p)
                     p2 = os.path.join(d, "disparity_vis.png")
-                    cv2.imwrite(p2, disp_vis)
+                    from depth_utils import imwrite_image
+                    imwrite_image(p2, disp_vis)
                     files.append(p2)
                     p3 = os.path.join(d, "meta_stage3.txt")
                     with open(p3, "w", encoding="utf-8") as fh:
@@ -693,8 +693,9 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     输入：cfg / args（可覆盖 ffs.scale、valid_iters、max_disp、depth 范围、点大小）
     输出：进程退出码
     """
-    from depth_utils import (CameraParams, colorize_depth, depth_stats, disp_correction_from_config,
-                             disparity_to_depth, filter_speckles, load_rectifier, save_depth_npy)
+    from depth_utils import (CameraParams, attach_range_bar, colorize_depth, depth_stats,
+                             disp_correction_from_config, disparity_to_depth, filter_speckles,
+                             load_rectifier, save_depth_npy)
     from pointcloud import PointCloudBuilder
     from stereo_depth import FFSError, FFSDepthEstimator
 
@@ -811,13 +812,15 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
               按 o 可以随时重新打开。
             """
             v = o3d.visualization.Visualizer()
-            v.create_window(window_name="stereo_project point cloud  "
-                                       "(display: Y up | file: Y down camera frame)"
-                                       + ("" if params_full.calibrated else "  [UNCALIBRATED]"),
+            v.create_window(window_name="3D" + ("" if params_full.calibrated else "  [UNCALIBRATED]"),
                             width=int(args.cloud_window), height=int(args.cloud_window))
             ro = v.get_render_option()
             ro.point_size = float(args.point_size)
-            ro.background_color = np.array([0.08, 0.08, 0.10])
+            ro.background_color = np.array([0.0, 0.0, 0.0])
+            try:
+                ro.light_on = False
+            except Exception:  # noqa: BLE001
+                pass
             return v
 
         # ---- 显示用点云：把 y 取反，让"相机坐标系"在 Open3D 里正着显示 --------------
@@ -984,13 +987,10 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 break
 
             # ---- 显示：左图 | 右图 | 深度伪彩 ----
-            depth_vis = colorize_depth(last["depth"], last["valid"], zmin_m, zmax_m)
-            warn = np.zeros((28, depth_vis.shape[1], 3), dtype=np.uint8)
-            StereoViewer._put_text(
-                warn,
-                ("UNCALIBRATED - no metric depth" if not params_full.calibrated else "CALIBRATED"),
-                (6, 20), (0, 220, 255) if not params_full.calibrated else (0, 255, 0), 0.5, 1, shadow=False)
-            depth_panel = np.vstack([depth_vis, warn])
+            depth_vis = attach_range_bar(
+                colorize_depth(last["depth"], last["valid"], zmin_m, zmax_m),
+                zmin_m, zmax_m, unit="m")
+            depth_tag = "UNCALIBRATED" if not params_full.calibrated else "CALIBRATED"
 
             elapsed = max(time.perf_counter() - t_loop_start, 1e-9)
             e2e = n_processed / elapsed
@@ -1013,9 +1013,9 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 key = -1
             else:
                 panels = [
-                    ("LEFT (raw, unrectified)", last["left"], [f"{last['left'].shape[1]}x{last['left'].shape[0]}"]),
-                    ("RIGHT (raw, unrectified)", last["right"], [f"{last['right'].shape[1]}x{last['right'].shape[0]}"]),
-                    (f"DEPTH (m, {zmin_m}..{zmax_m})", depth_panel, []),
+                    ("Color", last["left"], [f"{last['left'].shape[1]}x{last['left'].shape[0]}"]),
+                    ("Color R", last["right"], [f"{last['right'].shape[1]}x{last['right'].shape[0]}"]),
+                    ("Depth", depth_vis, [depth_tag]),
                 ]
                 key = viewer.show_panels(panels, status_lines=status, paused=paused)
 
@@ -1059,7 +1059,8 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                                           "有效深度比例": f"{last['stats']['valid_ratio']:.2f}%",
                                           "中位深度_m": f"{last['stats']['median_m']:.4f}"})
                 files.append(p)
-                cv2.imwrite(os.path.join(d, "depth_vis.png"), depth_vis)
+                from depth_utils import imwrite_image
+                imwrite_image(os.path.join(d, "depth_vis.png"), depth_vis)
                 files.append(os.path.join(d, "depth_vis.png"))
                 # 点云：为保存单独复制一份（避免与实时对象互相影响）
                 ply = builder.save_ply(o3d.geometry.PointCloud(pcd), d, last["params"],

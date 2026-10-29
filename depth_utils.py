@@ -35,6 +35,60 @@ import cv2
 import numpy as np
 
 
+def imwrite_image(path: str, image: np.ndarray) -> bool:
+    """保存图像。Windows 上 cv2.imwrite 遇到中文路径会静默返回 False。
+
+    先编码到内存，再用 Python 自己写文件（Unicode 路径可用）。
+    """
+    ext = os.path.splitext(str(path))[1] or ".png"
+    if not ext.startswith("."):
+        ext = "." + ext
+    ok, buf = cv2.imencode(ext, image)
+    if not ok:
+        return False
+    try:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(buf.tobytes())
+        return True
+    except OSError:
+        return False
+
+
+def _resolve_calib_path(cfg: Dict[str, Any]) -> str:
+    """把 depth.calibration_file 解析成绝对路径，不依赖当前工作目录。
+
+    优先：已经是绝对路径且文件存在；其次 project.calibration_dir + 文件名；
+    再在 app_paths 的搜索根里找（exe 目录、打包资源目录）。
+    都没有时仍返回预期路径，让调用方的报错能指出该放哪。
+    """
+    depth_cfg = cfg.get("depth", {}) or {}
+    raw = str(depth_cfg.get("calibration_file", "") or "calibration/stereo_calib.yaml")
+    name = os.path.basename(raw) or "stereo_calib.yaml"
+    if os.path.isabs(raw) and os.path.isfile(raw):
+        return os.path.normpath(raw)
+    base = str((cfg.get("project") or {}).get("calibration_dir", "") or "")
+    if base:
+        joined = os.path.normpath(os.path.join(base, name))
+        if os.path.isfile(joined):
+            return os.path.abspath(joined)
+    try:
+        from app_paths import find
+        for rel in (raw, os.path.join("calibration", name)):
+            if os.path.isabs(rel):
+                continue
+            hit = find(rel)
+            if os.path.isfile(hit):
+                return hit
+    except Exception:  # noqa: BLE001
+        pass
+    if base:
+        return os.path.normpath(os.path.join(base, name))
+    return raw
+
+
 @dataclass
 class CameraParams:
     """相机内参与基线（含"是否已真正标定"的状态）。
@@ -74,9 +128,7 @@ class CameraParams:
         calibrated = bool(depth_cfg.get("calibrated", False))
 
         if calibrated:
-            path = str(depth_cfg.get("calibration_file", ""))
-            if not os.path.isabs(path):
-                path = os.path.join(str(cfg.get("project", {}).get("calibration_dir", "")), os.path.basename(path))
+            path = _resolve_calib_path(cfg)
             from calibration import load_stereo_calibration  # 阶段 5 提供
 
             # 运行时若"先校正再推理"，视差是在**校正后**的图上算的，
@@ -170,9 +222,7 @@ def load_rectifier(cfg: Dict[str, Any]):
         return None
     if not bool(depth_cfg.get("rectify_before_infer", True)):
         return None
-    path = str(depth_cfg.get("calibration_file", ""))
-    if not os.path.isabs(path):
-        path = os.path.join(str(cfg.get("project", {}).get("calibration_dir", "")), os.path.basename(path))
+    path = _resolve_calib_path(cfg)
     if not os.path.exists(path):
         raise FileNotFoundError(f"配置要求启用校正，但标定文件不存在：{path}")
     from calibration import StereoCalibration
@@ -342,6 +392,51 @@ def colorize_depth(
     colored = cv2.applyColorMap(((1.0 - norm) * 255.0).astype(np.uint8), colormap)
     out[m] = colored[m]
     return out
+
+
+def attach_range_bar(
+    image: np.ndarray,
+    top_value: float,
+    bottom_value: float,
+    unit: str = "m",
+    colormap: int = cv2.COLORMAP_JET,
+) -> np.ndarray:
+    """在伪彩图右侧贴一条色标，样式对齐 RealSense Viewer 的深度标尺。
+
+    色条从上到下是 Jet 的高端到低端（红 → 蓝），与 colorize_depth 的方向一致：
+    调用方应把「近 / 高视差」放在 top_value。单位只影响刻度文字。
+    """
+    img = np.asarray(image)
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.ndim != 3 or img.shape[2] != 3:
+        raise ValueError(f"色标只能贴在灰度或 BGR 图上，当前形状 {getattr(img, 'shape', None)}")
+    h = int(img.shape[0])
+    if h < 2:
+        return img
+    bar_w, text_w = 14, 62
+    panel = np.zeros((h, bar_w + 6 + text_w, 3), dtype=np.uint8)
+    grad = np.linspace(255, 0, h, dtype=np.uint8).reshape(h, 1)
+    grad = np.repeat(grad, bar_w, axis=1)
+    panel[:, 0:bar_w] = cv2.applyColorMap(grad, colormap)
+
+    def _fmt(val: float) -> str:
+        if unit == "m":
+            return f"{val:.2f}m"
+        if unit == "px":
+            return f"{val:.0f}px"
+        return f"{val:.2f}{unit}"
+
+    def _put(text: str, y: int) -> None:
+        y = int(np.clip(y, 12, max(12, h - 4)))
+        cv2.putText(panel, text, (bar_w + 6, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42, (230, 230, 230), 1, cv2.LINE_AA)
+
+    _put(_fmt(float(top_value)), 14)
+    if h >= 96:
+        _put(_fmt(0.5 * (float(top_value) + float(bottom_value))), h // 2)
+    _put(_fmt(float(bottom_value)), h - 6)
+    return np.hstack([img, panel])
 
 
 def save_depth_npy(depth: np.ndarray, out_dir: str, params: CameraParams,

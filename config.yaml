@@ -289,7 +289,7 @@ pointcloud:
 # 运行时 / 显示
 # =============================================================================
 runtime:
-  window_name: "stereo_project"
+  window_name: "Stereo Viewer"
   display_scale: 1.0       # 显示窗口缩放；1.0 = 原始大小
   status_every_n_frames: 30
   # ---- 阶段 7.2：三线程流水线（采集 / 推理 解耦）----

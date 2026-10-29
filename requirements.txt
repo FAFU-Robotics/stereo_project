@@ -2,7 +2,7 @@
 #  stereo_project 依赖清单
 #  ---------------------------------------------------------------------------
 #  【2026-10-27 实测复核】本机实际环境：
-#      Python 3.14.6  C:\Users\never\AppData\Local\Python\pythoncore-3.14-64
+#      Python 3.14.6（独立安装，无 conda；实际路径用 `where python` 查）
 #      torch 2.9.1+cu128   torchvision 0.24.1+cu128   open3d 0.20.0
 #      RTX 5060 Laptop（sm_120，驱动 591.74）→ CUDA 可用，fp16 matmul/conv2d 实跑通过
 #

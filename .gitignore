@@ -14,10 +14,10 @@ third_party/Fast-FoundationStereo/output_docker/
 
 # ---- 本项目自动生成的数据（不入库，避免仓库膨胀）----
 output/
-weights/*.pth
-weights/*.pt
-weights/*.onnx
-weights/*.engine
+weights/**/*.pth
+weights/**/*.pt
+weights/**/*.onnx
+weights/**/*.engine
 third_party/**/output/
 third_party/**/output_docker/
 third_party/**/weights/*.pth
@@ -52,3 +52,15 @@ RenderOption_*.json
 build/
 dist/
 *.egg-info/
+
+# ---- EXE 交付物（约 5 GB，15761 个文件；其中 torch CUDA 运行库约 4.3 GB）----
+# 不进仓库：GitHub 单文件资产上限 2 GB，整仓库也不适合承载。
+# 对外发布方式见 docs/发布与分发.md（7-Zip 分卷 + GitHub Releases）。
+release/
+dist_release/
+*.7z.*
+*.zip.001
+
+# PyInstaller 的中间产物（build_exe.ps1 会在 packaging/ 下生成）
+packaging/build/
+packaging/dist/

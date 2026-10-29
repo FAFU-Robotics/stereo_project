@@ -1,5 +1,8 @@
-"""gui_theme.py —— 标定工作台的深色主题与可复用界面构件（纯 tkinter，零新依赖）
+"""gui_theme.py —— 科技黑主题与可复用界面构件（纯 tkinter，零新依赖）
 =============================================================================
+主界面（viewer_shell）和标定工作台共用这一份调色板：近黑底、冷青强调、
+细描边。改颜色只改这里，两处窗口会一起变。
+
 【为什么单独一个文件】
     颜色和字体原本散落在 calib_gui.py 各处（"#111111"、"#2a2a2a"、"#1f3320"…），
     同一个"警告黄"在不同页深浅不一，看着像几个不同的人拼出来的。这里集中定义：
@@ -26,27 +29,33 @@ from tkinter import ttk
 from typing import Optional, Tuple
 
 # -----------------------------------------------------------------------------
-# 调色板
+# 调色板：科技黑。近黑底，强调色只用青，语义色只表达合格 / 注意 / 不合格。
 # -----------------------------------------------------------------------------
-BG = "#0d1117"          # 窗口底色
-PANEL = "#161b22"       # 面板 / 输入框底色
-PANEL_HI = "#1b222c"    # 选中页签、悬停态
-CARD = "#12171e"        # 卡片内凹区
-BORDER = "#30363d"      # 1px 描边
-TEXT = "#e6edf3"        # 主文字
-MUTED = "#8b949e"       # 次要文字 / 占位
-ACCENT = "#2f81f7"      # 主操作蓝
-IMG_BG = "#0b0f14"      # 图像区（比窗口更暗，画面边界自然浮现）
+BG = "#06080c"          # 窗口底色
+TOP = "#080c12"         # 顶栏、底栏
+PANEL = "#0c121a"       # 侧栏 / 卡片 / 输入框
+PANEL_HI = "#15202c"    # 次级按钮、悬停
+CARD = "#090e14"        # 略凹一层（缩略图格子）
+BORDER = "#1c2c3c"      # 1px 描边，带一点青
+SEAM = "#0e3c4a"        # 面板之间的冷色接缝
+TEXT = "#e7f3f8"        # 主文字（冷白）
+MUTED = "#7e8d9c"       # 次要文字
+ACCENT = "#1ec8e6"      # 主强调青
+ACCENT_DK = "#0e90aa"   # 按下 / 深一档青
+ON_ACCENT = "#04141c"   # 青底上的字。青太亮，白字会发灰
+HOVER = "#1a2838"
+SELECT = "#0c4252"      # 列表、文本的选中底
+IMG_BG = "#030508"      # 图像井（比窗口更黑，画面边界自己浮出来）
 
-# 语义色：只用来表达"合格 / 注意 / 不合格"，不做装饰
-OK = "#3fb950"
-WARN = "#d29922"
-BAD = "#f85149"
+# 语义色
+OK = "#3ee0a2"
+WARN = "#e6b450"
+BAD = "#ff5d6c"
 
-# 底栏进度格的三档底色（深底浅字，避免整条底栏跳色）
-PILL_IDLE_BG, PILL_IDLE_FG = "#21262d", MUTED
-PILL_WARN_BG, PILL_WARN_FG = "#3a2f1a", "#f0e6d2"
-PILL_OK_BG, PILL_OK_FG = "#1f3320", "#c8e6c9"
+# 底栏进度格：深底浅字，避免整条底栏跳色
+PILL_IDLE_BG, PILL_IDLE_FG = "#121a24", MUTED
+PILL_WARN_BG, PILL_WARN_FG = "#2c2412", "#f3e6c4"
+PILL_OK_BG, PILL_OK_FG = "#10281e", "#b7f3d6"
 
 #: 字体族名。None 表示探测失败，交给 Tk 默认（中文会落到系统中文字体）
 FONT_UI: str = ""
@@ -115,14 +124,17 @@ def _apply_ttk(st: ttk.Style) -> None:
                  font=font(10, True))
 
     # ---- 页签
-    # 选中态要"一眼看出在哪一页"：靠背景亮度差（#0d1117 vs #11161d 差太小，
-    # 实测看不出），再叠加文字从灰转白，两层信号才够
-    st.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(2, 6, 2, 0))
+    # 选中页靠两层信号：底比未选中亮一档，字从灰变成青。
+    # 只靠亮度差不够（深色里相邻灰阶几乎分不出来）。
+    st.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(2, 8, 2, 0),
+                 bordercolor=BG, lightcolor=BG, darkcolor=BG)
     st.configure("TNotebook.Tab", background=PANEL, foreground=MUTED,
-                 padding=(18, 8), borderwidth=0, font=font(10))
+                 padding=(18, 8), borderwidth=0, font=font(10),
+                 bordercolor=PANEL, lightcolor=PANEL, darkcolor=PANEL,
+                 focuscolor=BG)
     st.map("TNotebook.Tab",
-           background=[("selected", "#242c37"), ("active", "#1f2630")],
-           foreground=[("selected", TEXT), ("active", TEXT)],
+           background=[("selected", "#142433"), ("active", PANEL_HI)],
+           foreground=[("selected", ACCENT), ("active", TEXT)],
            # clam 默认给选中页签做"放大"，会让整排页签抖动，这里抹平
            expand=[("selected", (0, 0, 0, 0))])
 
@@ -130,30 +142,34 @@ def _apply_ttk(st: ttk.Style) -> None:
     # width=0 不可省：clam 给 TButton 带了字符数默认宽度，中文按钮会被按字符截断
     # （实测"保存并归档"显示成"存并归档"、"删帧…"显示成"删帧..."）
     base = dict(background=PANEL, foreground=TEXT, bordercolor=BORDER,
+                lightcolor=PANEL, darkcolor=PANEL,
                 focuscolor=BG, relief="flat", padding=(12, 6), width=0,
                 font=font(10), anchor="center")
     st.configure("TButton", **base)
     st.map("TButton",
-           background=[("disabled", "#12161c"), ("pressed", "#252d38"),
-                       ("active", "#1f2630")],
-           foreground=[("disabled", "#6e7681")],
-           bordercolor=[("active", ACCENT), ("disabled", "#242a31")])
+           background=[("disabled", "#10161e"), ("pressed", "#1c2838"),
+                       ("active", HOVER)],
+           foreground=[("disabled", "#5c6a78")],
+           bordercolor=[("active", ACCENT), ("disabled", "#1a222c")])
 
     st.configure("Primary.TButton", **{**base, "background": ACCENT,
-                                       "foreground": "#ffffff",
+                                       "foreground": ON_ACCENT,
                                        "bordercolor": ACCENT,
+                                       "lightcolor": ACCENT, "darkcolor": ACCENT,
                                        "font": font(10, True)})
     st.map("Primary.TButton",
-           background=[("disabled", "#26456e"), ("pressed", "#1f6fe0"),
-                       ("active", "#4a92f8")],
-           foreground=[("disabled", "#9aa7b4")],
-           bordercolor=[("disabled", "#26456e"), ("active", "#4a92f8")])
+           background=[("disabled", "#0d4e60"), ("pressed", ACCENT_DK),
+                       ("active", "#4ad6ee")],
+           foreground=[("disabled", "#7aafbc"), ("pressed", ON_ACCENT),
+                       ("active", ON_ACCENT)],
+           bordercolor=[("disabled", "#0d4e60"), ("active", "#4ad6ee"),
+                        ("pressed", ACCENT_DK)])
 
     st.configure("Danger.TButton", **base)
     st.map("Danger.TButton",
-           bordercolor=[("active", BAD), ("disabled", "#242a31")],
-           foreground=[("active", "#ffb4ae")],
-           background=[("active", "#20161a")])
+           bordercolor=[("active", BAD), ("disabled", "#1a222c")],
+           foreground=[("active", "#ffc2c8")],
+           background=[("active", "#2a1418")])
 
     st.configure("Ghost.TButton", **{**base, "background": BG, "bordercolor": BG})
     st.map("Ghost.TButton",
@@ -173,17 +189,25 @@ def _apply_ttk(st: ttk.Style) -> None:
     st.map("TCombobox",
            bordercolor=[("focus", ACCENT), ("active", ACCENT)],
            # readonly 状态下 clam 会把底色刷回浅色，必须显式压住
-           fieldbackground=[("readonly", PANEL), ("disabled", "#12161c")],
+           fieldbackground=[("readonly", PANEL), ("disabled", "#10161e")],
            selectbackground=[("readonly", PANEL)],
            selectforeground=[("readonly", TEXT)])
 
     st.configure("TCheckbutton", background=BG, foreground=TEXT,
-                 indicatorbackground=PANEL, indicatorforeground=ACCENT,
+                 indicatorbackground=PANEL_HI, indicatorforeground=ACCENT,
                  bordercolor=BORDER, focusthickness=0, padding=(2, 3))
     st.map("TCheckbutton",
            background=[("active", BG)],
-           indicatorbackground=[("selected", ACCENT), ("active", PANEL_HI)],
-           indicatorforeground=[("selected", "#ffffff")])
+           indicatorbackground=[("selected", ACCENT), ("active", HOVER)],
+           indicatorforeground=[("selected", ON_ACCENT)])
+    # 卡片 / 侧栏底色是 PANEL，勾选框若仍用窗口底色 BG，会露出一块更深的补丁
+    st.configure("Panel.TCheckbutton", background=PANEL, foreground=TEXT,
+                 indicatorbackground=PANEL_HI, indicatorforeground=ACCENT,
+                 bordercolor=BORDER, focusthickness=0, padding=(2, 3))
+    st.map("Panel.TCheckbutton",
+           background=[("active", PANEL)],
+           indicatorbackground=[("selected", ACCENT), ("active", HOVER)],
+           indicatorforeground=[("selected", ON_ACCENT)])
 
     # ---- 滚动条：细、无箭头高光，融入深色底
     for orient, name in (("vertical", "Vertical.TScrollbar"),
@@ -191,7 +215,7 @@ def _apply_ttk(st: ttk.Style) -> None:
         st.configure(name, background=PANEL_HI, troughcolor=BG,
                      bordercolor=BG, arrowcolor=MUTED, relief="flat",
                      width=11, arrowsize=11)
-        st.map(name, background=[("active", "#2b3340"), ("pressed", ACCENT)])
+        st.map(name, background=[("active", "#243448"), ("pressed", ACCENT)])
 
     st.configure("TProgressbar", background=ACCENT, troughcolor=PANEL,
                  bordercolor=BORDER, lightcolor=ACCENT, darkcolor=ACCENT)
@@ -213,7 +237,7 @@ def _apply_tk_options(root: tk.Misc) -> None:
         db(f"*{cls}.highlightthickness", 1)
         db(f"*{cls}.highlightbackground", BORDER)
         db(f"*{cls}.highlightcolor", ACCENT)
-        db(f"*{cls}.selectbackground", "#1f3b5e")
+        db(f"*{cls}.selectbackground", SELECT)
         db(f"*{cls}.selectforeground", TEXT)
     db("*Text.insertBackground", TEXT)
     db("*Listbox.activestyle", "none")
@@ -221,12 +245,12 @@ def _apply_tk_options(root: tk.Misc) -> None:
     db("*TCombobox*Listbox.background", PANEL)
     db("*TCombobox*Listbox.foreground", TEXT)
     db("*TCombobox*Listbox.selectBackground", ACCENT)
-    db("*TCombobox*Listbox.selectForeground", "#ffffff")
+    db("*TCombobox*Listbox.selectForeground", ON_ACCENT)
     # 消息框 / 文件对话框的底色
     db("*Menu.background", PANEL)
     db("*Menu.foreground", TEXT)
     db("*Menu.activeBackground", ACCENT)
-    db("*Menu.activeForeground", "#ffffff")
+    db("*Menu.activeForeground", ON_ACCENT)
 
 
 def apply(root: tk.Misc) -> ttk.Style:
@@ -247,6 +271,25 @@ def apply(root: tk.Misc) -> ttk.Style:
 # -----------------------------------------------------------------------------
 # 复用构件
 # -----------------------------------------------------------------------------
+def brand_mark(parent: tk.Misc, bg: str = "") -> tk.Canvas:
+    """两个交叠的青圈。主界面和标定工作台顶栏用同一个标记。"""
+    bg = bg or TOP
+    c = tk.Canvas(parent, width=26, height=16, background=bg,
+                  highlightthickness=0, bd=0)
+    c.create_oval(1, 1, 15, 15, outline=ACCENT, width=2)
+    c.create_oval(10, 1, 24, 15, outline=ACCENT, width=2)
+    return c
+
+
+def accent_tick(parent: tk.Misc) -> tk.Frame:
+    """标题左侧 3px 青条。空 Frame 要关掉尺寸传播，否则高度会被压成 0。"""
+    tick = tk.Frame(parent, background=ACCENT, width=3, height=12,
+                    bd=0, highlightthickness=0)
+    tick.pack_propagate(False)
+    tick.pack(side="left", padx=(0, 8))
+    return tick
+
+
 def hline(parent: tk.Misc, pady: int = 6) -> tk.Frame:
     """1px 水平分隔线（ttk.Separator 在深色下会带阴影，用 Frame 更干净）。"""
     line = tk.Frame(parent, height=1, background=BORDER, bd=0, highlightthickness=0)
@@ -269,6 +312,7 @@ def card(parent: tk.Misc, title: str, subtitle: str = "",
                      highlightbackground=BORDER, highlightcolor=BORDER)
     head = tk.Frame(outer, background=PANEL, bd=0, highlightthickness=0)
     head.pack(fill="x", padx=pad, pady=(pad - 2, 0))
+    accent_tick(head)
     tk.Label(head, text=title, background=PANEL, foreground=TEXT,
              font=font(10, True), anchor="w").pack(side="left")
     if subtitle:
@@ -288,10 +332,11 @@ def image_panel(parent: tk.Misc, title: str, text: str) -> Tuple[tk.Frame, tk.La
     outer = tk.Frame(parent, background=BG, bd=0, highlightthickness=0)
     head = tk.Frame(outer, background=BG, bd=0, highlightthickness=0)
     head.pack(fill="x", pady=(0, 4))
-    tk.Label(head, text=title, background=BG, foreground=MUTED,
+    accent_tick(head)
+    tk.Label(head, text=title, background=BG, foreground=TEXT,
              font=font(9, True), anchor="w").pack(side="left")
     frame = tk.Frame(outer, background=IMG_BG, bd=0, highlightthickness=1,
-                     highlightbackground=BORDER)
+                     highlightbackground=SEAM)
     frame.pack(fill="both", expand=True)
     lbl = tk.Label(frame, text=text, anchor="center", background=IMG_BG,
                    foreground=MUTED, bd=0, highlightthickness=0)
@@ -309,7 +354,8 @@ def pill(parent: tk.Misc, textvar: tk.StringVar, width: int = 0) -> tk.Label:
     """底栏的状态胶囊：深底浅字，由调用方按语义改 background/foreground。"""
     lbl = tk.Label(parent, textvariable=textvar, anchor="w", padx=10, pady=3,
                    background=PILL_IDLE_BG, foreground=PILL_IDLE_FG,
-                   font=font(9, True), bd=0, highlightthickness=0)
+                   font=font(9, True), bd=0, highlightthickness=1,
+                   highlightbackground=BORDER, highlightcolor=BORDER)
     if width:
         lbl.configure(width=width)
     return lbl
@@ -320,15 +366,17 @@ def set_pill(lbl: tk.Label, kind: str) -> None:
     table = {"idle": (PILL_IDLE_BG, PILL_IDLE_FG),
              "warn": (PILL_WARN_BG, PILL_WARN_FG),
              "ok": (PILL_OK_BG, PILL_OK_FG),
-             "bad": ("#2d1618", "#ffb4ae")}
+             "bad": ("#2a1218", "#ffc2c8")}
     bg, fg = table.get(kind, table["idle"])
     lbl.configure(background=bg, foreground=fg)
 
 
 def keycap(parent: tk.Misc, keys: str) -> tk.Label:
-    """快捷键提示（形如 "空格 记录"），弱化成灰色小字。"""
-    return tk.Label(parent, text=keys, background=BG, foreground=MUTED,
-                    font=font(9), bd=0, highlightthickness=0)
+    """快捷键小胶囊，青字深底，和主按钮拉开层级。"""
+    return tk.Label(parent, text=keys, background=PANEL_HI, foreground=ACCENT,
+                    font=font(8, True), padx=6, pady=1, bd=0,
+                    highlightthickness=1, highlightbackground=BORDER,
+                    highlightcolor=BORDER)
 
 
 def style_text(widget: tk.Text, mono: bool = True, size: int = 9) -> None:
@@ -340,5 +388,5 @@ def style_text(widget: tk.Text, mono: bool = True, size: int = 9) -> None:
 def style_listbox(widget: tk.Listbox) -> None:
     widget.configure(font=font(9, mono=True), bd=0, highlightthickness=1,
                      highlightbackground=BORDER, highlightcolor=ACCENT,
-                     activestyle="none", selectbackground="#1f3b5e",
+                     activestyle="none", selectbackground=SELECT,
                      selectforeground=TEXT)
