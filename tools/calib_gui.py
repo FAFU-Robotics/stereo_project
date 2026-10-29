@@ -42,8 +42,8 @@ try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
 except ImportError:                        # pragma: no cover
-    print("[错误] 当前 Python 没有 tkinter。请安装官方 python.org 的 CPython 发行版"
-          "（安装时勾选 tcl/tk），而不是精简版/绿色版解释器。")
+    print(t("[错误] 当前 Python 没有 tkinter。请安装官方 python.org 的 CPython 发行版"
+          "（安装时勾选 tcl/tk），而不是精简版/绿色版解释器。"))
     raise SystemExit(1)
 
 # pillow 只是「更快的显示通道」，不是必需品。
@@ -85,6 +85,8 @@ import calib_core as core              # noqa: E402
 import calib_manage as manage          # noqa: E402
 import gui_state as gstate             # noqa: E402
 import gui_theme as theme               # noqa: E402
+from i18n import (t, tf, retranslate, language_label, to_zh,  # noqa: E402
+                  save_language, set_language, get_language, resolve_language)
 
 #: 系统缩放比，由 main() 里的 _enable_dpi_awareness() 填入（1.0 = 100%）
 _DPI_SCALE = 1.0
@@ -133,7 +135,7 @@ class CameraWorker(threading.Thread):
             cam = StereoCamera(self.cfg)
             cam.open()
         except Exception as exc:            # noqa: BLE001
-            self.error = f"打开相机失败：{type(exc).__name__}: {exc}"
+            self.error = tf('打开相机失败：{p0}: {p1}', p0=(type(exc).__name__), p1=(exc))
             self._stop.set()
             return
 
@@ -161,14 +163,14 @@ class CameraWorker(threading.Thread):
                 try:
                     pair = cam.read()
                 except Exception as exc:    # noqa: BLE001
-                    self.error = f"读取失败：{type(exc).__name__}: {exc}"
+                    self.error = tf('读取失败：{p0}: {p1}', p0=(type(exc).__name__), p1=(exc))
                     break
                 try:
                     res = cc.analyze_pair(pair.left, pair.right, self.spec, strict=True)
                     pose = cc.classify_pose(res, pair.left.shape[:2], self.spec)
                     reasons = [m[0] for m in cc.gate_messages(res, self.thr)]
                 except Exception as exc:    # noqa: BLE001
-                    self.error = f"分析失败：{type(exc).__name__}: {exc}"
+                    self.error = tf('分析失败：{p0}: {p1}', p0=(type(exc).__name__), p1=(exc))
                     break
                 now = time.perf_counter()
                 stamps.append(now)
@@ -243,12 +245,12 @@ class FrameGrid(tk.Toplevel):
     TH_W, TH_H = 168, 126
 
     def __init__(self, master: tk.Misc, items, on_delete=None,
-                 title: str = "帧缩略图") -> None:
+                 title: str = t("帧缩略图")) -> None:
         super().__init__(master)
         # Toplevel 自身的底色不在 option 数据库管辖范围内（那是按控件类匹配的），
         # 必须显式设一次，否则对话框边缘会露出一圈系统灰
         self.configure(background=theme.BG)
-        self.title(f"{title}（共 {len(items)} 帧）")
+        self.title(tf('{p0}（共 {p1} 帧）', p0=(title), p1=(len(items))))
         self.geometry("780x620")
         self.transient(master)
         self.items = list(items)
@@ -257,8 +259,8 @@ class FrameGrid(tk.Toplevel):
         self._sel: int = -1
         self._cells: List[tk.Frame] = []
 
-        hint = ("单击选中，双击看大图；"
-                + ("选中后按 Delete 删除（连磁盘文件一起删）。" if on_delete else "本目录来自磁盘，只读。"))
+        hint = (t("单击选中，双击看大图；")
+                + (t("选中后按 Delete 删除（连磁盘文件一起删）。") if on_delete else t("本目录来自磁盘，只读。")))
         tk.Label(self, text=hint, anchor="w", background=theme.BG, foreground=theme.MUTED,
                  font=theme.font(9)).pack(fill="x", padx=12, pady=(10, 6))
 
@@ -309,7 +311,7 @@ class FrameGrid(tk.Toplevel):
             self._photos[it["idx"]] = ph
             lab = tk.Label(cell, image=ph, background=theme.CARD, borderwidth=0)
             lab.pack()
-            txt = f"#{it['idx']:02d}  {it['desc']}\n角点 {it['n'] if it['n'] >= 0 else '—'}"
+            txt = tf('#{p0:02d}  {p1}\n角点 {p2}', p0=(it['idx']), p1=(it['desc']), p2=(it['n'] if it['n'] >= 0 else '—'))
             cap = tk.Label(cell, text=txt, background=theme.CARD, foreground=theme.TEXT,
                            font=theme.font(8, mono=True), justify="center")
             cap.pack()
@@ -340,11 +342,11 @@ class FrameGrid(tk.Toplevel):
         if img is None:
             return
         win = tk.Toplevel(self)
-        win.title(f"第 {it['idx']:02d} 帧 · {it['desc']} · 角点 {it['n']}")
+        win.title(tf('第 {p0:02d} 帧 · {p1} · 角点 {p2}', p0=(it['idx']), p1=(it['desc']), p2=(it['n'])))
         lbl = tk.Label(win)
         lbl.pack()
         self._show_in(lbl, img, "prev", max_w=980, max_h=720)
-        ttk.Button(win, text="关闭", command=win.destroy).pack(pady=6)
+        ttk.Button(win, text=t("关闭"), command=win.destroy).pack(pady=6)
 
     def _show_in(self, label: tk.Label, img: np.ndarray, key: str,
                  max_w: int, max_h: int) -> None:
@@ -362,9 +364,8 @@ class FrameGrid(tk.Toplevel):
         if self.on_delete is None or not (0 <= self._sel < len(self.items)):
             return
         it = self.items[self._sel]
-        if not messagebox.askyesno("确认删除",
-                                   f"删除第 {it['idx']:02d} 帧？\n\n{it['left']}\n{it['right']}\n\n"
-                                   "这两个文件会从磁盘删除，不可撤销。", parent=self):
+        if not messagebox.askyesno(t("确认删除"),
+                                   tf('删除第 {p0:02d} 帧？\n\n{p1}\n{p2}\n\n这两个文件会从磁盘删除，不可撤销。', p0=(it['idx']), p1=(it['left']), p2=(it['right'])), parent=self):
             return
         self.on_delete(it["idx"])
         self.destroy()
@@ -385,7 +386,7 @@ class CalibApp(tk.Tk):
             except Exception:               # noqa: BLE001
                 pass
         theme.apply(self)
-        self.title("双目标定工作台 —— 采集 / 标定 / 检查 / 保存")
+        self.title(t("双目标定工作台 —— 采集 / 标定 / 检查 / 保存"))
         # 记忆：窗口尺寸与位置、上次目录、阈值、标定板参数（见 tools/gui_state.py）
         self._has_state = os.path.exists(gstate.state_path())
         self.state = gstate.load()
@@ -450,9 +451,9 @@ class CalibApp(tk.Tk):
             log_path = ""
         try:
             messagebox.showerror(
-                "操作失败",
+                t("操作失败"),
                 f"{exc_type.__name__}: {exc}\n\n"
-                + (f"详情已写入：\n{log_path}" if log_path else "（日志写入失败）"))
+                + (tf('详情已写入：\n{p0}', p0=(log_path)) if log_path else t("（日志写入失败）")))
         except Exception:                      # noqa: BLE001 —— 弹窗本身失败不能再抛
             pass
 
@@ -461,18 +462,14 @@ class CalibApp(tk.Tk):
         try:
             import app_paths
             body = app_paths.describe_text()
-            body += "\n\n搜索顺序（按优先级）：\n" + "\n".join(
+            body += t("\n\n搜索顺序（按优先级）：\n") + "\n".join(
                 f"  {i}. {p}" for i, p in enumerate(app_paths.search_roots(), 1))
         except Exception as exc:               # noqa: BLE001
-            body = f"app_paths 不可用：{exc}\n\n项目根：{PROJECT_ROOT}"
-        body += (f"\n\n采集根目录：{core.CAPTURE_ROOT}"
-                 f"\n标定文件  ：{manage.CURRENT}"
-                 f"\n归档目录  ：{manage.ARCHIVE_DIR}"
-                 f"\n日志目录  ：{_writable_dir('logs')}"
-                 f"\n界面记忆  ：{gstate.state_path()}")
+            body = tf('app_paths 不可用：{p0}\n\n项目根：{p1}', p0=(exc), p1=(PROJECT_ROOT))
+        body += (tf('\n\n采集根目录：{p0}\n标定文件  ：{p1}\n归档目录  ：{p2}\n日志目录  ：{p3}\n界面记忆  ：{p4}', p0=(core.CAPTURE_ROOT), p1=(manage.CURRENT), p2=(manage.ARCHIVE_DIR), p3=(_writable_dir('logs')), p4=(gstate.state_path())))
 
         win = tk.Toplevel(self)
-        win.title("环境信息")
+        win.title(t("环境信息"))
         theme_pad = 10
         win.configure(background=theme.BG)
         txt = tk.Text(win, wrap="none", width=96, height=20, font=("Consolas", 9))
@@ -486,11 +483,11 @@ class CalibApp(tk.Tk):
         def _copy() -> None:
             self.clipboard_clear()
             self.clipboard_append(body)
-            self.var_status.set("环境信息已复制到剪贴板")
+            self.var_status.set(t("环境信息已复制到剪贴板"))
 
-        ttk.Button(row, text="复制全部", style="Primary.TButton", width=0,
+        ttk.Button(row, text=t("复制全部"), style="Primary.TButton", width=0,
                    command=_copy).pack(side="left")
-        ttk.Button(row, text="关闭", style="Ghost.TButton", width=0,
+        ttk.Button(row, text=t("关闭"), style="Ghost.TButton", width=0,
                    command=win.destroy).pack(side="right")
         win.transient(self)
 
@@ -520,14 +517,15 @@ class CalibApp(tk.Tk):
 
         self.var_dir = tk.StringVar(value=self.frames_dir)
         self.var_fix = tk.BooleanVar(value=bool(pick(st.get("fix_intrinsic", True), True)))
-        self.var_mode = tk.StringVar(value=st.get("check_mode") or gstate.CHECK_MODES[0])
+        # 显示值跟随界面语言；内部归一在 _mode_key / _save_state 完成
+        self.var_mode = tk.StringVar(value=t(st.get("check_mode") or gstate.CHECK_MODES[0]))
         self.var_alpha = tk.DoubleVar(value=float(st.get("alpha", 0.0)))
         self.var_save_path = tk.StringVar(value=manage.CURRENT)
         self.var_note = tk.StringVar(value="")
-        self.var_status = tk.StringVar(value="就绪")
-        self.var_ready = tk.StringVar(value="相机未打开")
+        self.var_status = tk.StringVar(value=t("就绪"))
+        self.var_ready = tk.StringVar(value=t("相机未打开"))
         self.var_chk_hint = tk.StringVar(value="")
-        self.var_short = tk.StringVar(value="还没开始采集")
+        self.var_short = tk.StringVar(value=t("还没开始采集"))
 
     # ------------------------------------------------------------------ 界面
     @staticmethod
@@ -550,16 +548,25 @@ class CalibApp(tk.Tk):
         theme.brand_mark(row, theme.TOP).pack(side="left", padx=(0, 10))
         tk.Label(row, text="STEREO", background=theme.TOP, foreground=theme.ACCENT,
                  font=theme.font(13, True)).pack(side="left")
-        tk.Label(row, text="标定工作台", background=theme.TOP, foreground=theme.TEXT,
+        tk.Label(row, text=t("标定工作台"), background=theme.TOP, foreground=theme.TEXT,
                  font=theme.font(13, True)).pack(side="left", padx=(8, 0))
-        tk.Label(row, text="① 采集    →    ② 标定    →    ③ 检查    →    ④ 保存",
+        tk.Label(row, text=t("① 采集    →    ② 标定    →    ③ 检查    →    ④ 保存"),
                  background=theme.TOP, foreground=theme.MUTED,
                  font=theme.font(9)).pack(side="left", padx=(16, 0))
+        # 界面语言：与主界面同一个下拉框语义（中文/English），切换即重译本窗口
+        self.lang_var = tk.StringVar(value=language_label())
+        self.lang_title = tk.Label(row, text=t("界面语言"), background=theme.TOP,
+                                   foreground=theme.MUTED, font=theme.font(9))
+        self.lang_title.pack(side="right", padx=(14, 0))
+        self.lang_box = ttk.Combobox(row, textvariable=self.lang_var, state="readonly",
+                                     values=("中文", "English"), width=9)
+        self.lang_box.pack(side="right")
+        self.lang_box.bind("<<ComboboxSelected>>", self._on_language)
         self.lbl_dep = tk.Label(row, text=self._dep_text(), background=theme.TOP,
                                 foreground=theme.MUTED, font=theme.font(9))
         self.lbl_dep.pack(side="right")
         # 打包成 EXE 后没有控制台，"东西到底存到哪了"只能靠这个按钮自查
-        ttk.Button(row, text="环境信息", style="Ghost.TButton", width=0,
+        ttk.Button(row, text=t("环境信息"), style="Ghost.TButton", width=0,
                    command=self._show_env).pack(side="right", padx=(0, 8))
         tk.Frame(self, background=theme.ACCENT, height=2, bd=0,
                  highlightthickness=0).pack(side="top", fill="x")
@@ -588,10 +595,10 @@ class CalibApp(tk.Tk):
         self.tab_cal = ttk.Frame(self.nb, padding=(8, 10, 8, 8))
         self.tab_chk = ttk.Frame(self.nb, padding=(8, 10, 8, 8))
         self.tab_sav = ttk.Frame(self.nb, padding=(8, 10, 8, 8))
-        self.nb.add(self.tab_cap, text="① 采集")
-        self.nb.add(self.tab_cal, text="② 标定")
-        self.nb.add(self.tab_chk, text="③ 检查校正效果")
-        self.nb.add(self.tab_sav, text="④ 保存参数")
+        self.nb.add(self.tab_cap, text=t("① 采集"))
+        self.nb.add(self.tab_cal, text=t("② 标定"))
+        self.nb.add(self.tab_chk, text=t("③ 检查校正效果"))
+        self.nb.add(self.tab_sav, text=t("④ 保存参数"))
         self._build_capture_tab()
         self._build_calibrate_tab()
         self._build_check_tab()
@@ -626,38 +633,38 @@ class CalibApp(tk.Tk):
         imgs.rowconfigure(0, weight=1)
         # 图像标签必须是 tk.Label：ttk.Label 不接受 background，
         # 深色底下会露出一块系统灰底，画面边界就糊了
-        box_l, self.lbl_left = theme.image_panel(imgs, "左眼 · 角点与判定叠加",
-                                              "LEFT（相机未打开）")
+        box_l, self.lbl_left = theme.image_panel(imgs, t("左眼 · 角点与判定叠加"),
+                                              t("LEFT（相机未打开）"))
         box_l.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        box_r, self.lbl_right = theme.image_panel(imgs, "右眼 · 角点与判定叠加", "RIGHT")
+        box_r, self.lbl_right = theme.image_panel(imgs, t("右眼 · 角点与判定叠加"), "RIGHT")
         box_r.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
 
         # 三张卡片用 grid 排在 holder 里：pack 在空间不足时会把最后放的那张整个裁掉，
         # 而质量门恰恰是最需要常驻可见的一块（它是"现在能不能存"的唯一依据）
 
         # ---- 卡片一：本帧三项硬指标
-        c_m, b_m = theme.card(holder, "本帧指标", "过门为绿")
+        c_m, b_m = theme.card(holder, t("本帧指标"), t("过门为绿"))
         c_m.grid(row=0, column=0, sticky="ew")
         self.txt_metrics = tk.Text(b_m, height=5, wrap="word", state="disabled")
         theme.style_text(self.txt_metrics)
         self.txt_metrics.pack(fill="both", expand=True)
 
         # ---- 卡片二：采集清单（吃掉中段剩余高度）
-        c_l, b_l = theme.card(holder, "采集清单", "姿态覆盖")
+        c_l, b_l = theme.card(holder, t("采集清单"), t("姿态覆盖"))
         c_l.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         self.txt_list = tk.Text(b_l, height=6, wrap="none", state="disabled")
         theme.style_text(self.txt_list)
         self.txt_list.pack(fill="both", expand=True)
 
         # ---- 卡片三：质量门（唯一允许随手改的地方）
-        c_t, b_t = theme.card(holder, "质量门（可改）", "低于下限即拒绝")
+        c_t, b_t = theme.card(holder, t("质量门（可改）"), t("低于下限即拒绝"))
         c_t.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         grid = tk.Frame(b_t, background=theme.PANEL)
         grid.pack(fill="x")
-        for i, (label, var) in enumerate((("每格 px", self.var_px),
-                                          ("清晰度", self.var_sharp),
-                                          ("对比度", self.var_contrast),
-                                          ("目标对数", self.var_target))):
+        for i, (label, var) in enumerate(((t("每格 px"), self.var_px),
+                                          (t("清晰度"), self.var_sharp),
+                                          (t("对比度"), self.var_contrast),
+                                          (t("目标对数"), self.var_target))):
             r, c = divmod(i, 2)
             tk.Label(grid, text=label, background=theme.PANEL, foreground=theme.MUTED,
                      font=theme.font(9), anchor="w"
@@ -671,29 +678,29 @@ class CalibApp(tk.Tk):
         # ---- 底部动作条：主操作在左，查看类靠右，流程推进单列最右
         btns = tk.Frame(f, background=theme.BG)
         btns.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        self.btn_open = ttk.Button(btns, text="打开相机", command=self._toggle_camera,
+        self.btn_open = ttk.Button(btns, text=t("打开相机"), command=self._toggle_camera,
                                    style="Primary.TButton")
         self.btn_open.pack(side="left")
-        ttk.Button(btns, text="保存这一帧", command=self._save_frame,
+        ttk.Button(btns, text=t("保存这一帧"), command=self._save_frame,
                    style="Primary.TButton").pack(side="left", padx=(8, 0))
-        theme.keycap(btns, "空格").pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="强制保存",
+        theme.keycap(btns, t("空格")).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text=t("强制保存"),
                    command=lambda: self._save_frame(force=True)
                    ).pack(side="left", padx=(10, 0))
         theme.keycap(btns, "F").pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="撤销", command=self._undo
+        ttk.Button(btns, text=t("撤销"), command=self._undo
                    ).pack(side="left", padx=(10, 0))
         theme.keycap(btns, "U").pack(side="left", padx=(6, 0))
 
-        self.btn_finish = ttk.Button(btns, text="完成采集 → 去标定",
+        self.btn_finish = ttk.Button(btns, text=t("完成采集 → 去标定"),
                                      command=self._finish_capture,
                                      style="Primary.TButton")
         self.btn_finish.pack(side="right")
-        ttk.Button(btns, text="覆盖热力图", command=self._show_coverage,
+        ttk.Button(btns, text=t("覆盖热力图"), command=self._show_coverage,
                    style="Ghost.TButton").pack(side="right", padx=(0, 8))
-        ttk.Button(btns, text="删帧…", command=self._delete_frame_dialog,
+        ttk.Button(btns, text=t("删帧…"), command=self._delete_frame_dialog,
                    style="Ghost.TButton").pack(side="right", padx=(0, 6))
-        ttk.Button(btns, text="缩略图…", command=self._open_thumbnails,
+        ttk.Button(btns, text=t("缩略图…"), command=self._open_thumbnails,
                    style="Ghost.TButton").pack(side="right", padx=(0, 6))
 
     # ------------------------------------------------------------ 页② 标定
@@ -709,52 +716,52 @@ class CalibApp(tk.Tk):
         head.columnconfigure(0, weight=3)
         head.columnconfigure(1, weight=2)
 
-        c_src, b_src = theme.card(head, "数据源", "带对数的是可用目录")
+        c_src, b_src = theme.card(head, t("数据源"), t("带对数的是可用目录"))
         c_src.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         line1 = tk.Frame(b_src, background=theme.PANEL)
         line1.pack(fill="x")
         self.cmb_dir = ttk.Combobox(line1, textvariable=self.var_dir, width=34)
         self.cmb_dir.pack(side="left", fill="x", expand=True)
-        ttk.Button(line1, text="刷新", command=self._refresh_dirs,
+        ttk.Button(line1, text=t("刷新"), command=self._refresh_dirs,
                    style="Ghost.TButton").pack(side="left", padx=(6, 0))
-        ttk.Button(line1, text="浏览…", command=self._browse_dir,
+        ttk.Button(line1, text=t("浏览…"), command=self._browse_dir,
                    style="Ghost.TButton").pack(side="left", padx=(6, 0))
-        ttk.Checkbutton(b_src, text="固定内参（推荐：只用外参重估）",
+        ttk.Checkbutton(b_src, text=t("固定内参（推荐：只用外参重估）"),
                         variable=self.var_fix, style="Panel.TCheckbutton"
                         ).pack(anchor="w", pady=(8, 0))
 
-        c_cal, b_cal = theme.card(head, "标定板与动作", "板参数必须与实物一致")
+        c_cal, b_cal = theme.card(head, t("标定板与动作"), t("板参数必须与实物一致"))
         c_cal.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         line2 = tk.Frame(b_cal, background=theme.PANEL)
         line2.pack(fill="x")
-        for label, var, width in (("列", self.var_cols, 5), ("行", self.var_rows, 5),
-                                  ("格边长 mm", self.var_square, 7)):
+        for label, var, width in ((t("列"), self.var_cols, 5), (t("行"), self.var_rows, 5),
+                                  (t("格边长 mm"), self.var_square, 7)):
             tk.Label(line2, text=label, background=theme.PANEL, foreground=theme.MUTED,
                      font=theme.font(9)).pack(side="left", padx=(0, 4))
             ttk.Entry(line2, textvariable=var, width=width).pack(side="left", padx=(0, 10))
 
         acts = tk.Frame(b_cal, background=theme.PANEL)
         acts.pack(fill="x", pady=(10, 0))
-        self.btn_cal = ttk.Button(acts, text="开始标定", command=self._start_calibration,
+        self.btn_cal = ttk.Button(acts, text=t("开始标定"), command=self._start_calibration,
                                   style="Primary.TButton")
         self.btn_cal.pack(side="left")
         # 取消：只清除"继续算"的意愿，不强杀线程。主计算是一次原生调用，打断不了，
         # 所以在阶段边界生效（详见 calib_core.check_cancel 的说明）。
-        self.btn_cancel = ttk.Button(acts, text="取消", command=self._cancel_job,
+        self.btn_cancel = ttk.Button(acts, text=t("取消"), command=self._cancel_job,
                                      state="disabled", style="Danger.TButton")
         self.btn_cancel.pack(side="left", padx=(8, 0))
-        self.btn_check = ttk.Button(acts, text="生成检查图", command=self._start_check,
+        self.btn_check = ttk.Button(acts, text=t("生成检查图"), command=self._start_check,
                                     state="disabled")
         self.btn_check.pack(side="left", padx=(8, 0))
 
         # ---- 下半：日志与结果各占一半，都能纵向拉伸
-        c_log, b_log = theme.card(f, "运行日志", "逐帧检出与被拒原因")
+        c_log, b_log = theme.card(f, t("运行日志"), t("逐帧检出与被拒原因"))
         c_log.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         self.txt_cal_log = tk.Text(b_log, height=7, wrap="none", state="disabled")
         theme.style_text(self.txt_cal_log)
         self.txt_cal_log.pack(fill="both", expand=True)
 
-        c_res, b_res = theme.card(f, "标定结果与体检", "RMS 之外还查基线量级 / T 方向 / 尺寸一致性")
+        c_res, b_res = theme.card(f, t("标定结果与体检"), t("RMS 之外还查基线量级 / T 方向 / 尺寸一致性"))
         c_res.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
         self.txt_cal_res = tk.Text(b_res, height=8, wrap="none", state="disabled")
         theme.style_text(self.txt_cal_res)
@@ -768,18 +775,19 @@ class CalibApp(tk.Tk):
 
         bar = tk.Frame(f, background=theme.BG)
         bar.grid(row=0, column=0, sticky="ew")
-        tk.Label(bar, text="显示方式", background=theme.BG, foreground=theme.MUTED,
+        tk.Label(bar, text=t("显示方式"), background=theme.BG, foreground=theme.MUTED,
                  font=theme.font(9)).pack(side="left")
-        ttk.Combobox(bar, textvariable=self.var_mode, width=24, state="readonly",
-                     values=list(gstate.CHECK_MODES)
-                     ).pack(side="left", padx=(6, 0))
+        # 语言切换时要重译下拉值，所以保留引用（pack 返回 None，不能链赋值）
+        self.cmb_mode = ttk.Combobox(bar, textvariable=self.var_mode, width=24, state="readonly",
+                                     values=[t(m) for m in gstate.CHECK_MODES])
+        self.cmb_mode.pack(side="left", padx=(6, 0))
         tk.Label(bar, text="alpha", background=theme.BG, foreground=theme.MUTED,
                  font=theme.font(9)).pack(side="left", padx=(14, 4))
         ttk.Spinbox(bar, from_=0.0, to=1.0, increment=0.1, width=6,
                     textvariable=self.var_alpha).pack(side="left")
-        ttk.Button(bar, text="重新生成", command=self._start_check,
+        ttk.Button(bar, text=t("重新生成"), command=self._start_check,
                    style="Primary.TButton").pack(side="left", padx=(12, 0))
-        ttk.Button(bar, text="另存图片…", command=self._save_check_image
+        ttk.Button(bar, text=t("另存图片…"), command=self._save_check_image
                    ).pack(side="left", padx=(8, 0))
 
         # 无标定时的引导条：直接告诉人去哪一步，并允许载入磁盘上已有的标定文件。
@@ -794,22 +802,22 @@ class CalibApp(tk.Tk):
                                  anchor="w", justify="left", background=theme.PANEL,
                                  foreground="#f0e6d2", font=theme.font(9))
         self.lbl_hint.grid(row=0, column=0, sticky="ew", padx=(10, 8), pady=7)
-        self.btn_hint_cal = ttk.Button(self.frm_hint, text="去第②页标定",
+        self.btn_hint_cal = ttk.Button(self.frm_hint, text=t("去第②页标定"),
                                        command=lambda: self.nb.select(self.tab_cal),
                                        style="Ghost.TButton")
         self.btn_hint_cal.grid(row=0, column=1, sticky="e", padx=(0, 8), pady=5)
-        self.btn_hint_load = ttk.Button(self.frm_hint, text="载入已有标定",
+        self.btn_hint_load = ttk.Button(self.frm_hint, text=t("载入已有标定"),
                                         command=self._load_current_calib,
                                         style="Ghost.TButton")
         self.btn_hint_load.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=5)
         # 换行宽度跟着窗口走：写死会在窄窗口下让文字重新压到按钮上
         self.frm_hint.bind("<Configure>", self._on_hint_resize)
 
-        img_outer, self.lbl_check = theme.image_panel(f, "校正结果预览",
-                                                   "先完成标定，再生成检查图")
+        img_outer, self.lbl_check = theme.image_panel(f, t("校正结果预览"),
+                                                   t("先完成标定，再生成检查图"))
         img_outer.grid(row=2, column=0, sticky="nsew")
 
-        c_chk, b_chk = theme.card(f, "复检数据", "极线残差、分区 |dy| 与结论")
+        c_chk, b_chk = theme.card(f, t("复检数据"), t("极线残差、分区 |dy| 与结论"))
         c_chk.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         self.txt_chk = tk.Text(b_chk, height=6, wrap="none", state="disabled")
         theme.style_text(self.txt_chk)
@@ -821,32 +829,32 @@ class CalibApp(tk.Tk):
         f.columnconfigure(0, weight=1)
         f.rowconfigure(1, weight=1)
 
-        c_sav, b_sav = theme.card(f, "写出标定文件",
-                               "只新增 calibration/*.yaml，不改 config.yaml")
+        c_sav, b_sav = theme.card(f, t("写出标定文件"),
+                               t("只新增 calibration/*.yaml，不改 config.yaml"))
         c_sav.grid(row=0, column=0, sticky="ew")
         r1 = tk.Frame(b_sav, background=theme.PANEL)
         r1.pack(fill="x")
-        tk.Label(r1, text="保存到", background=theme.PANEL, foreground=theme.MUTED,
+        tk.Label(r1, text=t("保存到"), background=theme.PANEL, foreground=theme.MUTED,
                  font=theme.font(9)).pack(side="left")
         ttk.Entry(r1, textvariable=self.var_save_path, width=48
                   ).pack(side="left", padx=(6, 0), fill="x", expand=True)
-        ttk.Button(r1, text="浏览…", command=self._browse_save,
+        ttk.Button(r1, text=t("浏览…"), command=self._browse_save,
                    style="Ghost.TButton").pack(side="left", padx=(6, 0))
 
         r2 = tk.Frame(b_sav, background=theme.PANEL)
         r2.pack(fill="x", pady=(8, 0))
-        tk.Label(r2, text="备注", background=theme.PANEL, foreground=theme.MUTED,
+        tk.Label(r2, text=t("备注"), background=theme.PANEL, foreground=theme.MUTED,
                  font=theme.font(9)).pack(side="left")
         ttk.Entry(r2, textvariable=self.var_note, width=26).pack(side="left", padx=(6, 0))
-        ttk.Button(r2, text="保存并归档", command=self._save_calib,
+        ttk.Button(r2, text=t("保存并归档"), command=self._save_calib,
                    style="Primary.TButton").pack(side="left", padx=(10, 0))
-        ttk.Button(r2, text="校验当前文件", command=self._validate_current
+        ttk.Button(r2, text=t("校验当前文件"), command=self._validate_current
                    ).pack(side="left", padx=(8, 0))
-        ttk.Button(r2, text="与上一份对比", command=self._diff_with_last
+        ttk.Button(r2, text=t("与上一份对比"), command=self._diff_with_last
                    ).pack(side="left", padx=(8, 0))
 
-        c_hist, b_hist = theme.card(f, "归档历史",
-                                 "选中后可激活：自动备份当前那份，可回滚")
+        c_hist, b_hist = theme.card(f, t("归档历史"),
+                                 t("选中后可激活：自动备份当前那份，可回滚"))
         c_hist.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         mid = tk.Frame(b_hist, background=theme.PANEL)
         mid.pack(fill="both", expand=True)
@@ -860,12 +868,12 @@ class CalibApp(tk.Tk):
         self.lst_arch.configure(yscrollcommand=sb.set)
         acts = tk.Frame(mid, background=theme.PANEL)
         acts.grid(row=0, column=2, sticky="n", padx=(8, 0))
-        ttk.Button(acts, text="刷新", command=self._refresh_archives,
+        ttk.Button(acts, text=t("刷新"), command=self._refresh_archives,
                    style="Ghost.TButton").pack(fill="x")
-        ttk.Button(acts, text="激活选中", command=self._activate_selected
+        ttk.Button(acts, text=t("激活选中"), command=self._activate_selected
                    ).pack(fill="x", pady=(6, 0))
 
-        c_out, b_out = theme.card(f, "操作结果", "校验 / 对比的输出都在这里")
+        c_out, b_out = theme.card(f, t("操作结果"), t("校验 / 对比的输出都在这里"))
         c_out.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self.txt_sav = tk.Text(b_out, height=6, wrap="none", state="disabled")
         theme.style_text(self.txt_sav)
@@ -959,7 +967,7 @@ class CalibApp(tk.Tk):
         """
         if self.session is None:
             if getattr(self, "_list_sig", None) != ("empty",):
-                self._set_text(self.txt_list, "还没有保存任何一帧")
+                self._set_text(self.txt_list, t("还没有保存任何一帧"))
                 self._list_sig = ("empty",)
             self._apply_short(None)
             return
@@ -969,9 +977,9 @@ class CalibApp(tk.Tk):
         plan = self.session.shortage()
         if sig != getattr(self, "_list_sig", None):
             lines = self.session.checklist_lines()
-            lines += ["", f"进度：{plan['text']}"]
+            lines += ["", tf('进度：{p0}', p0=(plan['text']))]
             if plan["advice"]:
-                lines += ["下一步："] + [f"  · {a}" for a in plan["advice"]]
+                lines += [t("下一步：")] + [f"  · {a}" for a in plan["advice"]]
             self._set_text(self.txt_list, "\n".join(lines))
             self._list_sig = sig
         self._apply_short(plan)
@@ -979,19 +987,19 @@ class CalibApp(tk.Tk):
     def _apply_short(self, plan: Optional[Dict[str, Any]]) -> None:
         """底栏那一格：短到一眼能读完，颜色直接表示"该继续拍 / 该去标定"。"""
         if plan is None:
-            self.var_short.set("还没开始采集")
+            self.var_short.set(t("还没开始采集"))
             theme.set_pill(self.lbl_short, "idle")
             return
         if plan["done"]:
-            self.var_short.set("采集完成：数量与姿态都达标")
+            self.var_short.set(t("采集完成：数量与姿态都达标"))
             theme.set_pill(self.lbl_short, "ok")
             return
         bits: List[str] = []
         if plan["short"] > 0:
-            bits.append(f"还差 {plan['short']} 对")
+            bits.append(tf('还差 {p0} 对', p0=(plan['short'])))
         if plan["missing"]:
-            bits.append(f"缺 {len(plan['missing'])} 类姿态")
-        self.var_short.set(" · ".join(bits) if bits else "继续采集")
+            bits.append(tf('缺 {p0} 类姿态', p0=(len(plan['missing']))))
+        self.var_short.set(" · ".join(bits) if bits else t("继续采集"))
         # 数量不够时给暖色：这是唯一需要用户立刻行动的信号
         theme.set_pill(self.lbl_short, "warn" if plan["short"] > 0 else "idle")
 
@@ -1014,16 +1022,16 @@ class CalibApp(tk.Tk):
                 continue
             rp = os.path.join(d, f"right_{int(base):02d}.png")
             out.append({"idx": int(base), "left": lp, "right": rp,
-                        "desc": "磁盘", "n": -1})
+                        "desc": t("磁盘"), "n": -1})
         return out
 
     def _open_thumbnails(self) -> None:
         items = self._thumb_items()
         if not items:
-            messagebox.showinfo("提示", "还没有可看的帧：先在①页采集，或在②页选一个采集目录")
+            messagebox.showinfo(t("提示"), t("还没有可看的帧：先在①页采集，或在②页选一个采集目录"))
             return
         on_del = self._delete_frame_by_idx if self.session is not None else None
-        FrameGrid(self, items, on_delete=on_del, title="帧缩略图")
+        FrameGrid(self, items, on_delete=on_del, title=t("帧缩略图"))
 
     def _delete_frame_by_idx(self, idx: int) -> None:
         if self.session is None:
@@ -1033,7 +1041,7 @@ class CalibApp(tk.Tk):
             return
         ok = self.session.remove(rec)
         self._refresh_checklist()
-        self.var_status.set(f"已删除第 {idx:02d} 帧" if ok else f"第 {idx:02d} 帧已不在列表里")
+        self.var_status.set(tf('已删除第 {p0:02d} 帧', p0=(idx)) if ok else tf('第 {p0:02d} 帧已不在列表里', p0=(idx)))
 
     # ------------------------------------------------------------------ 主循环
     def _tick(self) -> None:
@@ -1082,19 +1090,19 @@ class CalibApp(tk.Tk):
                     self._on_checked(out)
             elif kind == "cancelled":
                 self._set_busy(None)
-                self.var_status.set("已取消（未改动任何文件）")
+                self.var_status.set(t("已取消（未改动任何文件）"))
                 target = self.txt_cal_log if payload == "calib" else self.txt_chk
-                self._log(target, "[取消] 用户中止，本次结果未采用")
+                self._log(target, t("[取消] 用户中止，本次结果未采用"))
             elif kind == "error":
                 job_kind, msg = payload
                 self._set_busy(None)
-                self.var_status.set(f"{job_kind} 失败")
+                self.var_status.set(tf('{p0} 失败', p0=(job_kind)))
                 if job_kind == "calib":
-                    self._log(self.txt_cal_log, f"[失败] {msg}")
-                    messagebox.showerror("标定失败", msg)
+                    self._log(self.txt_cal_log, tf('[失败] {p0}', p0=(msg)))
+                    messagebox.showerror(t("标定失败"), msg)
                 else:
-                    self._log(self.txt_chk, f"[失败] {msg}")
-                    messagebox.showerror("检查图生成失败", msg)
+                    self._log(self.txt_chk, tf('[失败] {p0}', p0=(msg)))
+                    messagebox.showerror(t("检查图生成失败"), msg)
 
     def _set_busy(self, kind: Optional[str]) -> None:
         """统一管理"计算中"的按钮状态，避免取消/完成/失败三条路径各写一遍。"""
@@ -1111,7 +1119,7 @@ class CalibApp(tk.Tk):
             return
         self.cancel_evt.set()
         self.btn_cancel.configure(state="disabled")
-        self.var_status.set("正在取消…（主计算是一整次原生调用，需等它算完，通常 1~3 秒）")
+        self.var_status.set(t("正在取消…（主计算是一整次原生调用，需等它算完，通常 1~3 秒）"))
 
     @staticmethod
     def _log(widget: tk.Text, line: str) -> None:
@@ -1163,8 +1171,8 @@ class CalibApp(tk.Tk):
         if self.worker is not None:
             self.worker.stop()
             self.worker = None
-            self.btn_open.configure(text="打开相机")
-            self._set_ready("相机已关闭", "idle")
+            self.btn_open.configure(text=t("打开相机"))
+            self._set_ready(t("相机已关闭"), "idle")
             return
         self.spec = core.default_spec(self.var_cols.get(), self.var_rows.get(),
                                       self.var_square.get())
@@ -1178,8 +1186,8 @@ class CalibApp(tk.Tk):
                                    preview_fps=perf["preview_fps"],
                                    cv_threads=int(perf["cv_threads"]))
         self.worker.start()
-        self.btn_open.configure(text="关闭相机")
-        self._set_ready("相机正在打开…（首次打开约需 2~5 秒）", "warn")
+        self.btn_open.configure(text=t("关闭相机"))
+        self._set_ready(t("相机正在打开…（首次打开约需 2~5 秒）"), "warn")
 
     def _on_frame(self, pair, res, pose, reasons, fps) -> None:
         self._last_frame = (pair, res, pose, reasons, fps)
@@ -1194,9 +1202,8 @@ class CalibApp(tk.Tk):
         self._show(right_vis, self.lbl_right, "live_r", fit=True)
 
         level = res.get("level", "bad")
-        tag = {"ok": "可保存", "warn": "勉强可用", "bad": "不可用"}.get(level, level)
-        self._set_ready(f"{tag}  |  {fps:.1f} 帧/秒  |  "
-                        f"每格 {res.get('px_per_square', 0):.1f} px", level)
+        tag = {"ok": t("可保存"), "warn": t("勉强可用"), "bad": t("不可用")}.get(level, level)
+        self._set_ready(tf('{p0}  |  {p1:.1f} 帧/秒  |  每格 {p2:.1f} px', p0=(tag), p1=(fps), p2=(res.get('px_per_square', 0))), level)
 
         dup = False
         if pose is not None and self.session is not None:
@@ -1205,28 +1212,24 @@ class CalibApp(tk.Tk):
             except Exception:               # noqa: BLE001
                 dup = False
         pose_txt = ("-" if pose is None else
-                    f"{pose['region']} 倾斜 {pose['tilt_deg']:.0f}° {pose['tilt_dir']}")
+                    tf('{p0} 倾斜 {p1:.0f}° {p2}', p0=(pose['region']), p1=(pose['tilt_deg']), p2=(pose['tilt_dir'])))
         lines = [
-            f"角点  左 {'√' if res.get('found_l') else '×'}   "
-            f"右 {'√' if res.get('found_r') else '×'}   "
-            f"{'双眼可用' if (res.get('found_l') and res.get('found_r')) else '仅单眼'}",
-            f"每格像素      {res.get('px_per_square', 0):.1f}",
-            f"清晰度        {res.get('sharpness', 0):.0f}",
-            f"对比度(最差)  {res.get('pattern_contrast_min', 0):.0f}",
-            f"姿态          {pose_txt}",
-            f"已保存        {self.session.count if self.session else 0}"
-            f" / {self.var_target.get()}（双眼 "
-            f"{self.session.stereo_count if self.session else 0}）",
+            tf('角点  左 {p0}   右 {p1}   {p2}', p0=('√' if res.get('found_l') else '×'), p1=('√' if res.get('found_r') else '×'), p2=(t('双眼可用') if (res.get('found_l') and res.get('found_r')) else t('仅单眼'))),
+            tf('每格像素      {p0:.1f}', p0=(res.get('px_per_square', 0))),
+            tf('清晰度        {p0:.0f}', p0=(res.get('sharpness', 0))),
+            tf('对比度(最差)  {p0:.0f}', p0=(res.get('pattern_contrast_min', 0))),
+            tf('姿态          {p0}', p0=(pose_txt)),
+            tf('已保存        {p0} / {p1}（双眼 {p2}）', p0=(self.session.count if self.session else 0), p1=(self.var_target.get()), p2=(self.session.stereo_count if self.session else 0)),
         ]
         if reasons:
             lines.append("")
-            lines += ["拦下：" + r for r in reasons]
+            lines += [t("拦下：") + r for r in reasons]
         elif dup:
             lines.append("")
-            lines.append("拦下：与已保存的某张姿态过于相似")
+            lines.append(t("拦下：与已保存的某张姿态过于相似"))
         else:
             lines.append("")
-            lines.append("质检通过，可以保存（空格）")
+            lines.append(t("质检通过，可以保存（空格）"))
         self._set_text(self.txt_metrics, "\n".join(lines))
         if self.session is not None:
             self._refresh_checklist()
@@ -1234,11 +1237,11 @@ class CalibApp(tk.Tk):
     # ------------------------------------------------------------------ 录制
     def _save_frame(self, force: bool = False) -> None:
         if self.worker is None:
-            messagebox.showinfo("提示", "先打开相机")
+            messagebox.showinfo(t("提示"), t("先打开相机"))
             return
         p = self._last_frame
         if p is None:
-            self.var_status.set("还没有可用画面，等相机出一帧再试")
+            self.var_status.set(t("还没有可用画面，等相机出一帧再试"))
             return
         pair, res, pose, reasons, _ = p
         thr = {"min_px_per_square": self.var_px.get(),
@@ -1252,12 +1255,12 @@ class CalibApp(tk.Tk):
         try:
             rec = self.session.record(pair.left, pair.right, res, pose, force=force)
         except core.CaptureRejected as exc:
-            self.var_status.set(f"未保存：{exc}")
+            self.var_status.set(tf('未保存：{p0}', p0=(exc)))
             return
         except Exception as exc:            # noqa: BLE001
-            messagebox.showerror("保存失败", f"{type(exc).__name__}: {exc}")
+            messagebox.showerror(t("保存失败"), f"{type(exc).__name__}: {exc}")
             return
-        self.var_status.set(f"已保存第 {rec.idx} 帧 → {self.session.dir}")
+        self.var_status.set(tf('已保存第 {p0} 帧 → {p1}', p0=(rec.idx), p1=(self.session.dir)))
         self._refresh_checklist()
 
     def _on_tab_changed(self, _evt=None) -> None:
@@ -1310,23 +1313,23 @@ class CalibApp(tk.Tk):
             return
         rec = self.session.undo()
         if rec is None:
-            self.var_status.set("没有可撤销的帧")
+            self.var_status.set(t("没有可撤销的帧"))
             return
-        self.var_status.set(f"已撤销第 {rec.idx} 帧")
+        self.var_status.set(tf('已撤销第 {p0} 帧', p0=(rec.idx)))
         self._refresh_checklist()
 
     def _delete_frame_dialog(self) -> None:
         """列出本次会话已存的帧，允许删掉任意一帧（不只是最后一帧）。"""
         if self.session is None or self.session.count == 0:
-            messagebox.showinfo("提示", "本次会话还没有保存任何一帧")
+            messagebox.showinfo(t("提示"), t("本次会话还没有保存任何一帧"))
             return
         rows = self.session.frame_rows()
 
         win = tk.Toplevel(self)
-        win.title(f"删除帧（共 {len(rows)} 帧）")
+        win.title(tf('删除帧（共 {p0} 帧）', p0=(len(rows))))
         win.transient(self)
         win.geometry("440x380")
-        ttk.Label(win, text="选中一帧后按「删除选中」或 Delete 键；文件会一并从磁盘删除。",
+        ttk.Label(win, text=t("选中一帧后按「删除选中」或 Delete 键；文件会一并从磁盘删除。"),
                   wraplength=410, justify="left").pack(anchor="w", padx=10, pady=(8, 4))
 
         box = ttk.Frame(win)
@@ -1337,7 +1340,7 @@ class CalibApp(tk.Tk):
         sb.pack(side="right", fill="y")
         lb.configure(yscrollcommand=sb.set)
         for idx, desc, n in rows:
-            lb.insert("end", f"#{idx:02d}   {desc:<12} 角点 {n:3d}")
+            lb.insert("end", tf('#{p0:02d}   {p1:<12} 角点 {p2:3d}', p0=(idx), p1=(desc), p2=(n)))
         if rows:
             lb.selection_set(0)
 
@@ -1353,25 +1356,24 @@ class CalibApp(tk.Tk):
             if rec is None:
                 return
             if not messagebox.askyesno(
-                    "确认删除",
-                    f"删除第 {idx:02d} 帧？\n\n{rec.left_path}\n{rec.right_path}\n\n"
-                    "这两个文件会从磁盘删除，不可撤销。",
+                    t("确认删除"),
+                    tf('删除第 {p0:02d} 帧？\n\n{p1}\n{p2}\n\n这两个文件会从磁盘删除，不可撤销。', p0=(idx), p1=(rec.left_path), p2=(rec.right_path)),
                     parent=win):
                 return
             ok = self.session.remove(rec)
             self._refresh_checklist()
-            self.var_status.set(f"已删除第 {idx:02d} 帧" if ok else f"第 {idx:02d} 帧已不在列表里")
+            self.var_status.set(tf('已删除第 {p0:02d} 帧', p0=(idx)) if ok else tf('第 {p0:02d} 帧已不在列表里', p0=(idx)))
             win.destroy()
 
-        ttk.Button(btns, text="删除选中", command=do_delete).pack(side="left")
-        ttk.Button(btns, text="取消", command=win.destroy).pack(side="right")
+        ttk.Button(btns, text=t("删除选中"), command=do_delete).pack(side="left")
+        ttk.Button(btns, text=t("取消"), command=win.destroy).pack(side="right")
         lb.bind("<Delete>", do_delete)
         lb.bind("<Double-Button-1>", do_delete)
         lb.focus_set()
 
     def _show_coverage(self) -> None:
         if self.session is None or self.session.count == 0:
-            messagebox.showinfo("提示", "还没有采集任何一帧")
+            messagebox.showinfo(t("提示"), t("还没有采集任何一帧"))
             return
         rec = self.session.records[-1]
         ref = cv2.imread(rec.left_path)
@@ -1379,24 +1381,24 @@ class CalibApp(tk.Tk):
             return
         img = chk.coverage_overlay(ref, self.session.grid_counts())
         win = tk.Toplevel(self)
-        win.title(f"覆盖热力图（{self.session.coverage_ratio() * 100:.0f}% 的格子有角点）")
+        win.title(tf('覆盖热力图（{p0:.0f}% 的格子有角点）', p0=(self.session.coverage_ratio() * 100)))
         lbl = ttk.Label(win)
         lbl.pack()
         self._show(img, lbl, "cov", max_w=760, max_h=560)
 
     def _finish_capture(self) -> None:
         if self.session is None or self.session.count == 0:
-            messagebox.showinfo("提示", "还没有采集任何一帧")
+            messagebox.showinfo(t("提示"), t("还没有采集任何一帧"))
             return
         try:
             paths = self.session.finalize()
         except Exception as exc:            # noqa: BLE001
-            messagebox.showerror("写报告失败", str(exc))
+            messagebox.showerror(t("写报告失败"), str(exc))
             return
         self.var_dir.set(self.session.dir)
         self._refresh_dirs()
         self.nb.select(self.tab_cal)
-        self._log(self.txt_cal_log, f"采集完成：{self.session.count} 对，报告 {paths['txt']}")
+        self._log(self.txt_cal_log, tf('采集完成：{p0} 对，报告 {p1}', p0=(self.session.count), p1=(paths['txt'])))
 
     # ------------------------------------------------------------------ 目录
     def _capture_candidates(self) -> List[Dict[str, Any]]:
@@ -1435,11 +1437,11 @@ class CalibApp(tk.Tk):
 
     def _refresh_dirs(self) -> None:
         items = self._capture_candidates()
-        names = [f"{d['name']}  ({d['pairs']} 对)" for d in items]
+        names = [tf('{p0}  ({p1} 对)', p0=(d['name']), p1=(d['pairs'])) for d in items]
         self.cmb_dir.configure(values=names)
         self._dirs = items
         if not names:
-            self.var_status.set("还没有采集会话：去①页采集，或点「浏览…」选一个含 left_*.png 的文件夹")
+            self.var_status.set(t("还没有采集会话：去①页采集，或点「浏览…」选一个含 left_*.png 的文件夹"))
             return
         # 记忆里存的可能是绝对路径、相对路径或下拉框标签；统一判定一次有效性。
         # 无效就落到最新一个 —— 否则下拉框显示的是个已经不存在的路径，
@@ -1487,19 +1489,19 @@ class CalibApp(tk.Tk):
     # ------------------------------------------------------------------ 标定
     def _start_calibration(self) -> None:
         if self.job is not None and self.job.is_alive():
-            messagebox.showinfo("提示", "上一项任务还在运行")
+            messagebox.showinfo(t("提示"), t("上一项任务还在运行"))
             return
         frames_dir = self._current_frames_dir()
         if not frames_dir:
-            messagebox.showwarning("提示", "请先选择一个采集目录")
+            messagebox.showwarning(t("提示"), t("请先选择一个采集目录"))
             return
         self.spec = core.default_spec(self.var_cols.get(), self.var_rows.get(),
                                       self.var_square.get())
         self._set_text(self.txt_cal_log, "")
         self._set_text(self.txt_cal_res, "")
-        self._log(self.txt_cal_log, f"目录：{frames_dir}")
-        self._log(self.txt_cal_log, f"标定板：{self.spec.describe()}")
-        self.var_status.set("标定计算中…（可点「取消」）")
+        self._log(self.txt_cal_log, tf('目录：{p0}', p0=(frames_dir)))
+        self._log(self.txt_cal_log, tf('标定板：{p0}', p0=(self.spec.describe())))
+        self.var_status.set(t("标定计算中…（可点「取消」）"))
         self.cancel_evt = threading.Event()
         self._set_busy("calib")
         self.job = Job("calib", self.q, core.calibrate_from_dir, frames_dir, self.spec,
@@ -1514,63 +1516,60 @@ class CalibApp(tk.Tk):
         self.calib_out = out
         calib = out["calib"]
         self._log(self.txt_cal_log, calib.summary())
-        self._log(self.txt_cal_log, f"耗时 {out['elapsed_s']:.1f} s，"
-                                    f"图像尺寸 {out['image_size'][0]}x{out['image_size'][1]}")
+        self._log(self.txt_cal_log, tf('耗时 {p0:.1f} s，图像尺寸 {p1}x{p2}', p0=(out['elapsed_s']), p1=(out['image_size'][0]), p2=(out['image_size'][1])))
         pre = out.get("pre_dy") or []
         post = core.summarize_post(out.get("post_rows") or [])
         if pre:
             self._log(self.txt_cal_log,
-                      f"校正前 |dy| 平均 {float(np.mean(pre)):.2f} px  "
-                      f"最大 {float(np.max(pre)):.2f} px")
+                      tf('校正前 |dy| 平均 {p0:.2f} px  最大 {p1:.2f} px', p0=(float(np.mean(pre))), p1=(float(np.max(pre)))))
         if post["n"]:
             self._log(self.txt_cal_log,
-                      f"校正后 |dy| 平均 {post['dy_mean']:.3f} px  "
-                      f"最大 {post['dy_max']:.3f} px（{post['n']} 帧复检）")
+                      tf('校正后 |dy| 平均 {p0:.3f} px  最大 {p1:.3f} px（{p2} 帧复检）', p0=(post['dy_mean']), p1=(post['dy_max']), p2=(post['n'])))
         items = core.validate(calib, out["image_size"], out.get("post_rows") or [])
         self._set_text(self.txt_cal_res, core.validate_text(items))
         self.btn_check.configure(state="normal")
         self._update_check_hint()
-        self.var_status.set("标定完成，可生成检查图")
+        self.var_status.set(t("标定完成，可生成检查图"))
         self.nb.select(self.tab_chk)
 
     # ------------------------------------------------------------------ 检查
     def _start_check(self, _retry: bool = False) -> None:
         if self.calib_out is None:
             self._update_check_hint()
-            messagebox.showinfo("还没有标定结果",
-                                "这一页要在标定之后才能画。两条路：\n\n"
+            messagebox.showinfo(t("还没有标定结果"),
+                                t("这一页要在标定之后才能画。两条路：\n\n"
                                 "· 去第②页做一次标定（会自动跳到本页）\n"
                                 "· 若磁盘上已有 calibration/stereo_calib.yaml，"
-                                "点上方「载入已有标定文件」直接看")
+                                "点上方「载入已有标定文件」直接看"))
             return
         if not self._current_frames_dir() or not glob.glob(
                 os.path.join(self._current_frames_dir(), "left_*.png")):
             # 目录选择器在②页「数据源」，不在①页 —— 原提示把用户指到了一个没有控件的地方
-            self.var_status.set("请先在②页「数据源」选一个有 left_*.png 的会话")
+            self.var_status.set(t("请先在②页「数据源」选一个有 left_*.png 的会话"))
             if _retry:
                 return
             if messagebox.askyesno(
-                    "没有可用的采集图",
-                    "检查图需要一对真实的左右原图来校正。\n\n"
+                    t("没有可用的采集图"),
+                    t("检查图需要一对真实的左右原图来校正。\n\n"
                     "当前没有选中含 left_*.png 的采集目录。\n"
                     "现在就选一个文件夹吗？\n"
-                    "（也可以先去②页「数据源」下拉框选，或在①页采集几对）"):
+                    "（也可以先去②页「数据源」下拉框选，或在①页采集几对）")):
                 picked = filedialog.askdirectory(
                     parent=self, initialdir=core.CAPTURE_ROOT,
-                    title="选择包含 left_*.png / right_*.png 的采集目录")
+                    title=t("选择包含 left_*.png / right_*.png 的采集目录"))
                 if picked:
                     self.var_dir.set(picked)
                     self._refresh_dirs()
                     self._start_check(_retry=True)
             return
         if self.job is not None and self.job.is_alive():
-            messagebox.showinfo("提示", "上一项任务还在运行")
+            messagebox.showinfo(t("提示"), t("上一项任务还在运行"))
             return
         calib = self.calib_out["calib"]
         frames_dir = self._current_frames_dir()
         alpha = float(self.var_alpha.get())
         spec = self.spec
-        self.var_status.set("生成检查图…（可点「取消」）")
+        self.var_status.set(t("生成检查图…（可点「取消」）"))
         self.cancel_evt = threading.Event()
         self._set_busy("check")
         cancel = self.cancel_evt
@@ -1598,15 +1597,13 @@ class CalibApp(tk.Tk):
         """按当前状态刷新③页顶部的引导条：有标定就收起，没标定就说清去哪一步。"""
         if self.calib_out is not None:
             calib = self.calib_out.get("calib")
-            src = self.calib_out.get("loaded_from") or "本次标定结果"
+            src = self.calib_out.get("loaded_from") or t("本次标定结果")
             try:
-                info = (f"当前用：{os.path.basename(str(src))} · "
-                        f"基线 {calib.baseline_mm:.3f} mm · "
-                        f"rect fx {calib.rect_fx:.2f} px")
+                info = (tf('当前用：{p0} · 基线 {p1:.3f} mm · rect fx {p2:.2f} px', p0=(os.path.basename(str(src))), p1=(calib.baseline_mm), p2=(calib.rect_fx)))
                 if getattr(calib, "rms_stereo", 0):
                     info += f" · RMS {calib.rms_stereo:.3f} px"
             except Exception:              # noqa: BLE001
-                info = f"当前用：{src}"
+                info = tf('当前用：{p0}', p0=(src))
             self.var_chk_hint.set(info)
             self.btn_hint_cal.configure(state="disabled")
             self.btn_hint_load.configure(state="disabled")
@@ -1617,15 +1614,13 @@ class CalibApp(tk.Tk):
         exists = os.path.exists(manage.CURRENT)
         if exists:
             self.var_chk_hint.set(
-                "还没有载入标定结果。磁盘上已有一份 "
-                f"{os.path.basename(manage.CURRENT)}，可直接载入查看校正效果；"
-                "也可以回第②页重新标定。")
+                tf('还没有载入标定结果。磁盘上已有一份 {p0}，可直接载入查看校正效果；也可以回第②页重新标定。', p0=(os.path.basename(manage.CURRENT))))
             self.btn_hint_load.configure(state="normal")
             self.btn_hint_cal.configure(state="normal")
         else:
             self.var_chk_hint.set(
-                "还没有任何标定结果。请先去第②页选采集目录并执行标定"
-                "（没有标定文件时本页无法生成校正图）。")
+                t("还没有任何标定结果。请先去第②页选采集目录并执行标定"
+                "（没有标定文件时本页无法生成校正图）。"))
             self.btn_hint_load.configure(state="disabled")
             self.btn_hint_cal.configure(state="normal")
         self.frm_hint.grid()
@@ -1649,20 +1644,20 @@ class CalibApp(tk.Tk):
         """载入磁盘上已有的 stereo_calib.yaml，跳过重新标定直接看校正效果。"""
         path = manage.CURRENT
         if not os.path.exists(path):
-            messagebox.showinfo("没有标定文件", f"未找到：\n{path}")
+            messagebox.showinfo(t("没有标定文件"), tf('未找到：\n{p0}', p0=(path)))
             return
         try:
             calib = core._cal().StereoCalibration.load(path)
         except Exception as exc:           # noqa: BLE001
-            messagebox.showerror("载入失败", f"{type(exc).__name__}: {exc}")
+            messagebox.showerror(t("载入失败"), f"{type(exc).__name__}: {exc}")
             return
         self.calib_out = {"calib": calib, "loaded_from": path,
                           "image_size": tuple(calib.image_size), "post_rows": []}
         self.btn_check.configure(state="normal")
-        self._log(self.txt_chk, f"已载入 {path}\n{calib.summary()}")
+        self._log(self.txt_chk, tf('已载入 {p0}\n{p1}', p0=(path), p1=(calib.summary())))
         # 第②页也要回填：原先只有"在本页算完"才写结果面板，于是"载入已有标定"之后
         # ②页的「标定结果与体检」一片空白，用户会误以为没载入成功（数据只在③页出现）
-        self._set_text(self.txt_cal_log, f"载入已有标定：{path}")
+        self._set_text(self.txt_cal_log, tf('载入已有标定：{p0}', p0=(path)))
         self._log(self.txt_cal_log, calib.summary())
         self._set_text(self.txt_cal_res,
                        core.validate_text(core.validate(calib, tuple(calib.image_size), [])))
@@ -1670,7 +1665,7 @@ class CalibApp(tk.Tk):
         if not self._current_frames_dir():
             self._refresh_dirs()
         self._update_check_hint()
-        self.var_status.set("已载入标定文件，正在生成检查图…")
+        self.var_status.set(t("已载入标定文件，正在生成检查图…"))
         self._start_check()
 
     def _on_checked(self, out: Dict[str, Any]) -> None:
@@ -1679,14 +1674,16 @@ class CalibApp(tk.Tk):
         stats = out["stats"]
         self._set_text(self.txt_chk,
                        chk.region_stats_text(stats) + "\n\n" + chk.alpha_text(out["alpha"]))
-        self.var_status.set(f"检查图已生成（用第 {out['frame_index']} 帧）")
+        self.var_status.set(tf('检查图已生成（用第 {p0} 帧）', p0=(out['frame_index'])))
 
-    def _render_check(self) -> None:
-        if self.check_out is None:
-            return
-        imgs = self.check_out["images"]
-        key = self.var_mode.get()
-        pick = {
+    @staticmethod
+    def _mode_key(value: str) -> str:
+        """把显示方式的中/英文显示名归一到内部代码。
+
+        var_mode 里存的是下拉框显示文本（随语言切换），gui_state 记忆里
+        存的永远是中文原名 —— 两种都要能映射回 stack/sbs/...。
+        """
+        mapping = {
             "上下叠放 + 水平线": "stack",
             "并排 + 参考线": "sbs",
             "红青立体": "anaglyph",
@@ -1694,7 +1691,14 @@ class CalibApp(tk.Tk):
             "棋盘混合": "checker",
             "覆盖热力图": "coverage",
             "分区 |dy| 热力图": "region",
-        }.get(key, "stack")
+        }
+        return mapping.get(value) or mapping.get(to_zh(value)) or "stack"
+
+    def _render_check(self) -> None:
+        if self.check_out is None:
+            return
+        imgs = self.check_out["images"]
+        pick = self._mode_key(self.var_mode.get())
         self._show(imgs.get(pick), self.lbl_check, "chk", fit=True)
 
     def _save_check_image(self) -> None:
@@ -1705,13 +1709,11 @@ class CalibApp(tk.Tk):
         if not p:
             return
         key = self.var_mode.get()
-        pick = {"上下叠放 + 水平线": "stack", "并排 + 参考线": "sbs", "红青立体": "anaglyph",
-                "左右差值": "diff", "棋盘混合": "checker", "覆盖热力图": "coverage",
-                "分区 |dy| 热力图": "region"}.get(key, "stack")
+        pick = self._mode_key(key)
         img = self.check_out["images"].get(pick)
         from depth_utils import imwrite_image
         if img is not None and imwrite_image(p, img):
-            self.var_status.set(f"已保存 {p}")
+            self.var_status.set(tf('已保存 {p0}', p0=(p)))
 
     # ------------------------------------------------------------------ 保存
     def _browse_save(self) -> None:
@@ -1723,7 +1725,7 @@ class CalibApp(tk.Tk):
 
     def _save_calib(self) -> None:
         if self.calib_out is None:
-            messagebox.showinfo("提示", "还没有可保存的标定结果")
+            messagebox.showinfo(t("提示"), t("还没有可保存的标定结果"))
             return
         calib = self.calib_out["calib"]
         path = self.var_save_path.get().strip() or manage.CURRENT
@@ -1731,21 +1733,21 @@ class CalibApp(tk.Tk):
         lines: List[str] = []
         try:
             if os.path.abspath(path) == os.path.abspath(manage.CURRENT) and os.path.exists(path):
-                b = manage.archive(path, note=note or "保存新标定前自动备份")
-                lines.append(f"已备份旧文件：{b}")
+                b = manage.archive(path, note=note or t("保存新标定前自动备份"))
+                lines.append(tf('已备份旧文件：{p0}', p0=(b)))
             calib.save(path)
-            lines.append(f"已保存：{path}")
+            lines.append(tf('已保存：{p0}', p0=(path)))
             if os.path.abspath(path) == os.path.abspath(manage.CURRENT):
-                b2 = manage.archive(path, note=note or "本次保存的标定")
-                lines.append(f"已归档：{b2}")
+                b2 = manage.archive(path, note=note or t("本次保存的标定"))
+                lines.append(tf('已归档：{p0}', p0=(b2)))
         except Exception as exc:            # noqa: BLE001
-            messagebox.showerror("保存失败", f"{type(exc).__name__}: {exc}")
+            messagebox.showerror(t("保存失败"), f"{type(exc).__name__}: {exc}")
             return
         lines += ["", core.validate_text(core.validate(
             calib, calib.image_size, (self.calib_out or {}).get("post_rows") or []))]
         self._set_text(self.txt_sav, "\n".join(lines))
         self._refresh_archives()
-        self.var_status.set("标定文件已保存")
+        self.var_status.set(t("标定文件已保存"))
 
     def _refresh_archives(self) -> None:
         self.lst_arch.delete(0, "end")
@@ -1762,35 +1764,35 @@ class CalibApp(tk.Tk):
     def _activate_selected(self) -> None:
         sel = self.lst_arch.curselection()
         if not sel:
-            messagebox.showinfo("提示", "先选中一条归档")
+            messagebox.showinfo(t("提示"), t("先选中一条归档"))
             return
         rows = getattr(self, "_arch_rows", [])
         if not (0 <= sel[0] < len(rows)):
             return
         target = rows[sel[0]].get("path", "")
         if not os.path.exists(target):
-            messagebox.showerror("错误", f"归档文件不存在：{target}")
+            messagebox.showerror(t("错误"), tf('归档文件不存在：{p0}', p0=(target)))
             return
-        if not messagebox.askyesno("确认", "把这份归档设为当前生效标定？\n"
-                                           "当前文件会先自动备份，可随时退回。"):
+        if not messagebox.askyesno(t("确认"), t("把这份归档设为当前生效标定？\n"
+                                           "当前文件会先自动备份，可随时退回。")):
             return
         try:
             res = manage.activate(target, self.var_note.get().strip())
         except Exception as exc:            # noqa: BLE001
-            messagebox.showerror("激活失败", str(exc))
+            messagebox.showerror(t("激活失败"), str(exc))
             return
-        msg = [f"已激活：{res['activated']}", f"当前文件：{res['current']}"]
+        msg = [tf('已激活：{p0}', p0=(res['activated'])), tf('当前文件：{p0}', p0=(res['current']))]
         if res["backup"]:
-            msg.append(f"原文件备份：{res['backup']}")
+            msg.append(tf('原文件备份：{p0}', p0=(res['backup'])))
         msg.append("")
-        msg.append("提示：运行中的程序需要调用 SDK 的 reload_calibration()，"
-                   "或重启程序，才会用上新的标定参数。")
+        msg.append(t("提示：运行中的程序需要调用 SDK 的 reload_calibration()，"
+                   "或重启程序，才会用上新的标定参数。"))
         self._set_text(self.txt_sav, "\n".join(msg))
         self._refresh_archives()
 
     def _validate_current(self) -> None:
         path = self.var_save_path.get().strip() or manage.CURRENT
-        self._set_text(self.txt_sav, f"校验：{path}\n\n" +
+        self._set_text(self.txt_sav, tf('校验：{p0}\n\n', p0=(path)) +
                        manage.validate_text(manage.validate_file(path)))
 
     def _diff_with_last(self) -> None:
@@ -1798,17 +1800,17 @@ class CalibApp(tk.Tk):
         if not rows:
             rows = manage.list_archives()
         if not rows:
-            messagebox.showinfo("提示", "还没有归档可比")
+            messagebox.showinfo(t("提示"), t("还没有归档可比"))
             return
         b = rows[-1].get("path", "")
         a = self.var_save_path.get().strip() or manage.CURRENT
         if not os.path.exists(a) or not os.path.exists(b):
-            messagebox.showinfo("提示", "文件不存在，无法对比")
+            messagebox.showinfo(t("提示"), t("文件不存在，无法对比"))
             return
         try:
             text = manage.diff_text(a, b)
         except Exception as exc:            # noqa: BLE001
-            messagebox.showerror("对比失败", str(exc))
+            messagebox.showerror(t("对比失败"), str(exc))
             return
         self._set_text(self.txt_sav, f"A = {a}\nB = {b}\n\n{text}")
 
@@ -1821,6 +1823,81 @@ class CalibApp(tk.Tk):
             return default if v is None or v == "" else v
         except Exception:                   # noqa: BLE001 —— TclError 等
             return default
+
+    def _config_path(self) -> str:
+        try:
+            import app_paths
+            p = app_paths.find("config.yaml")
+            return p or ""
+        except Exception:                   # noqa: BLE001
+            return "config.yaml" if os.path.exists("config.yaml") else ""
+
+    def _on_language(self, _event=None) -> None:
+        """下拉框切换语言：重写整窗文案，并把选择写回 config.yaml。
+
+        与主界面同一语义：不重建窗口，相机连接、采集会话、后台任务都保留。
+        """
+        want = "en" if str(self.lang_var.get()).lower().startswith("en") else "zh"
+        if want == get_language():
+            return
+        set_language(want, explicit=True)
+        path = self._config_path()
+        if path and not save_language(path, want):
+            self.var_status.set(tf("语言偏好没有写回 {path}", path=path))
+        self._retranslate_ui()
+        self.var_status.set(t("界面语言已切换为 English") if want == "en"
+                            else t("界面语言已切换为中文"))
+
+    def _retranslate_ui(self) -> None:
+        """把控件树上已有的文案按当前语言重写一遍（不重建窗口）。"""
+        def walk(widget: tk.Misc) -> None:
+            for child in widget.winfo_children():
+                try:
+                    cur = child.cget("text")
+                except Exception:           # noqa: BLE001
+                    cur = None
+                if isinstance(cur, str) and cur:
+                    new = retranslate(cur)
+                    if new != cur:
+                        try:
+                            child.configure(text=new)
+                        except Exception:   # noqa: BLE001
+                            pass
+                walk(child)
+
+        walk(self)
+
+        # 窗口标题
+        title = self.title()
+        new_title = retranslate(title)
+        if new_title != title:
+            self.title(new_title)
+
+        # 四个页签
+        try:
+            for i in range(len(self.nb.tabs())):
+                tab = self.nb.tab(i, "text")
+                new_tab = retranslate(str(tab))
+                if new_tab != tab:
+                    self.nb.tab(i, text=new_tab)
+        except Exception:                   # noqa: BLE001
+            pass
+
+        # 显示方式下拉：值列表跟语言走，当前值换成新语言的显示名
+        try:
+            self.var_mode.set(retranslate(self.var_mode.get()))
+            self.cmb_mode.configure(values=[t(m) for m in gstate.CHECK_MODES])
+        except Exception:                   # noqa: BLE001
+            pass
+
+        # 走 StringVar 的状态文字（动态格式文本下一轮刷新自然跟上）
+        for var in (self.var_status, self.var_ready, self.var_short):
+            try:
+                var.set(retranslate(var.get()))
+            except Exception:               # noqa: BLE001
+                pass
+        self.lang_var.set(language_label())
+        self._update_check_hint()
 
     def _save_state(self) -> bool:
         """把窗口尺寸、当前页、上次目录、阈值、标定板参数写进记忆文件。"""
@@ -1845,7 +1922,9 @@ class CalibApp(tk.Tk):
                 "rows": self._safe(self.var_rows, 9),
                 "square": self._safe(self.var_square, 3.0),
             },
-            "check_mode": self.var_mode.get(),
+            # 存中文原名：gui_state 只认 CHECK_MODES 里的中文名；
+            # 英文界面下 var_mode 显示英文，写回前归一
+            "check_mode": to_zh(self.var_mode.get()),
             "alpha": self._safe(self.var_alpha, 0.0),
             "fix_intrinsic": bool(self.var_fix.get()),
         }
@@ -1863,14 +1942,14 @@ class CalibApp(tk.Tk):
         if self.worker is not None:
             self.worker.stop()
         if self.session is not None and self.session.count and not self.session._finalized:
-            if messagebox.askyesno("退出", "本次采集还没写报告，现在写吗？"):
+            if messagebox.askyesno(t("退出"), t("本次采集还没写报告，现在写吗？")):
                 try:
                     self.session.finalize()
                 except Exception:           # noqa: BLE001
                     pass
         if not ok:
             # 记忆写不进去不影响使用，但要让人知道下次不会保持这次的布局
-            print(f"[提示] 界面记忆未能写入：{gstate.state_path()}", file=sys.stderr)
+            print(tf('[提示] 界面记忆未能写入：{p0}', p0=(gstate.state_path())), file=sys.stderr)
         self.destroy()
 
 
@@ -1905,10 +1984,19 @@ def _enable_dpi_awareness() -> float:
 
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="双目标定 GUI（采集/标定/检查/保存）")
-    ap.add_argument("--dir", default="", help="预填采集目录")
-    ap.add_argument("--selftest", action="store_true", help="只建界面，300ms 后自动退出")
+    ap = argparse.ArgumentParser(description=t("双目标定 GUI（采集/标定/检查/保存）"))
+    ap.add_argument("--dir", default="", help=t("预填采集目录"))
+    ap.add_argument("--selftest", action="store_true", help=t("只建界面，300ms 后自动退出"))
+    ap.add_argument("--lang", default="", choices=("", "zh", "en"),
+                    help=t("界面语言 zh / en；留空读 config.yaml 的 ui.language"))
     args = ap.parse_args(argv)
+    # 语言：命令行 > config.yaml（app_entry 已定过语言时 _EXPLICIT 保护不会被覆盖）
+    try:
+        import app_paths
+        _cfg = app_paths.find("config.yaml") if hasattr(app_paths, "find") else ""
+    except Exception:                       # noqa: BLE001
+        _cfg = "config.yaml" if os.path.exists("config.yaml") else ""
+    resolve_language(_cfg, args.lang)
 
     scale = _enable_dpi_awareness()
     # 缩放比交给 CalibApp 在 __init__ 里应用：必须在建立任何控件之前生效，

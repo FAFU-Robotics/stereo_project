@@ -1236,6 +1236,9 @@ class ViewerApp(tk.Tk):
         else:
             gui = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calib_gui.py")
             cmd = [sys.executable, gui]
+        # 子进程不共享 i18n 模块状态：把当前语言显式传过去，
+        # 让标定工作台与主界面始终同语言（--lang 优先于配置文件）
+        cmd += ["--lang", get_language()]
         try:
             self._calib_proc = subprocess.Popen(cmd)
         except Exception as exc:  # noqa: BLE001

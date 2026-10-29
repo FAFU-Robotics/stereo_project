@@ -41,7 +41,8 @@ Chinese and English:
 - the choice is written back to `ui.language` in `config.yaml` and used on the next launch;
 - `StereoCamera.exe --lang en` overrides the config for one session.
 
-> The calibration console (the four-page workflow) is Chinese-only for now.
+> The calibration console has its own **Language** dropdown in its top bar and follows
+> the same rules. When opened from the main window it starts in the viewer's language.
 > Low-level libraries may still return error text in Chinese; it is shown verbatim
 > in the Notifications panel.
 
