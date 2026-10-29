@@ -483,6 +483,8 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--mode", choices=("gui",) + CLI_MODES, default="gui",
                     help="gui=主界面/标定；其余三种进实时链路（需要 torch）")
     ap.add_argument("--config", default="", help="改用别的 config.yaml")
+    ap.add_argument("--lang", default="", choices=("", "zh", "en"),
+                    help="界面语言：zh / en；留空读 config.yaml 的 ui.language")
     ap.add_argument("--where", action="store_true", help="打印路径解析结果后退出")
     ap.add_argument("--version", action="store_true", help="打印版本后退出")
     ap.add_argument("--selftest", action="store_true", help="环境自检（不需要相机）")
@@ -498,6 +500,19 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
                     help="不连相机，只加载权重并对合成图推理一帧")
     # parse_known_args：让 main.py 的 --scale/--threaded/--list 等参数照样能用
     args, extra = ap.parse_known_args(raw)
+
+    try:
+        import i18n
+        cfg_path = args.config or ""
+        if not cfg_path:
+            try:
+                import app_paths
+                cfg_path = app_paths.find("config.yaml")
+            except Exception:                   # noqa: BLE001
+                cfg_path = ""
+        i18n.resolve_language(cfg_path, args.lang)
+    except Exception:                           # noqa: BLE001
+        pass
 
     if args.version:
         try:

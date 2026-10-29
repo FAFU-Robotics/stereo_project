@@ -11,6 +11,8 @@
 
 ---
 
+> English overview: [README_EN.md](README_EN.md)　·　English docs: [docs/en/](docs/en/)
+
 ## 快速开始
 
 ### 路线 A：只想用起来（不需要装 Python）

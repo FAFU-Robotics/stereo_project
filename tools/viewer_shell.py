@@ -51,7 +51,7 @@ try:
     import tkinter as tk
     from tkinter import ttk
 except ImportError:
-    print("[错误] 当前 Python 没有 tkinter。请安装官方 CPython，并勾选 tcl/tk。")
+    print(t("[错误] 当前 Python 没有 tkinter。请安装官方 CPython，并勾选 tcl/tk。"))
     raise SystemExit(1)
 
 try:
@@ -62,6 +62,7 @@ except ImportError:
     _HAVE_PIL = False
 
 import gui_theme as theme
+from i18n import t, tf
 
 # 与标定工作台同一套科技黑，颜色只在 gui_theme.py 里改。
 BG = theme.BG
@@ -82,7 +83,7 @@ SELECT = theme.SELECT
 HOVER = theme.HOVER
 SEAM = theme.SEAM
 
-PRESET_ITEMS = (("精确", "precise"), ("平衡", "balanced"), ("快速", "fast"))
+PRESET_ITEMS = ((t("精确"), "precise"), (t("平衡"), "balanced"), (t("快速"), "fast"))
 
 
 def _enable_dpi() -> float:
@@ -337,9 +338,9 @@ class ViewerApp(tk.Tk):
         self.show_depth = tk.BooleanVar(value=True)
         self.show_disp = tk.BooleanVar(value=False)
         self.preset_var = tk.StringVar(value=preset_label)
-        self.status_var = tk.StringVar(value="未连接")
-        self.device_var = tk.StringVar(value="双目深度相机")
-        self.meta_var = tk.StringVar(value="分辨率 —    帧率 —")
+        self.status_var = tk.StringVar(value=t("未连接"))
+        self.device_var = tk.StringVar(value=t("双目深度相机"))
+        self.meta_var = tk.StringVar(value=t("分辨率 —    帧率 —"))
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -351,7 +352,7 @@ class ViewerApp(tk.Tk):
         self.bind("3", lambda e: self._preset_view("cloud"))
         self.after(40, self._tick)
         self.after(80, self._refresh_results)
-        self._log("就绪。开始串流后可在 2D / 3D 之间切换。标定请先停止串流。")
+        self._log(t("就绪。开始串流后可在 2D / 3D 之间切换。标定请先停止串流。"))
 
     # ------------------------------------------------------------------ 外观
     def _style_scale(self) -> None:
@@ -412,7 +413,7 @@ class ViewerApp(tk.Tk):
                  font=self._f(12, True)).pack(side="left", padx=(6, 0))
         tk.Label(top, textvariable=self.device_var, bg=TOP, fg=MUTED,
                  font=self._f(9)).pack(side="left", padx=(16, 0))
-        self.btn_stream = self._button(top, "开始串流", self._toggle_stream, primary=True)
+        self.btn_stream = self._button(top, t("开始串流"), self._toggle_stream, primary=True)
         self.btn_stream.pack(side="right", padx=14, pady=10)
 
         body = tk.Frame(self, bg=SEAM)
@@ -452,49 +453,49 @@ class ViewerApp(tk.Tk):
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         self.side_canvas = canvas
 
-        dev = self._section(inner, "设备")
+        dev = self._section(inner, t("设备"))
         dev.pack(fill="x")
         row = tk.Frame(dev, bg=SIDE)
         row.pack(fill="x", padx=14, pady=(0, 8))
         self.dot = tk.Canvas(row, width=12, height=12, bg=SIDE, highlightthickness=0)
         self.dot.pack(side="left", pady=4)
         self._paint_dot(MUTED)
-        self.dev_text = tk.Label(row, text="未连接", bg=SIDE, fg=TEXT, font=self._f(10, True))
+        self.dev_text = tk.Label(row, text=t("未连接"), bg=SIDE, fg=TEXT, font=self._f(10, True))
         self.dev_text.pack(side="left", padx=8)
-        self.dev_sub = tk.Label(dev, text="开始串流后显示分辨率和帧率", bg=SIDE, fg=MUTED,
-                                font=self._f(9), justify="left", anchor="w")
+        self.dev_sub = tk.Label(dev, text=t("开始串流后显示分辨率和帧率"), bg=SIDE, fg=MUTED,
+                                font=self._f(9), justify="left", anchor="w", wraplength=168)
         self.dev_sub.pack(fill="x", padx=14, pady=(0, 4))
 
-        streams = self._section(inner, "画面")
+        streams = self._section(inner, t("画面"))
         streams.pack(fill="x")
-        self._check(streams, "彩色（左）", self.show_left)
-        self._check(streams, "彩色（右）", self.show_right)
-        self._check(streams, "深度", self.show_depth)
-        self._check(streams, "视差", self.show_disp)
-        tk.Label(streams, text="点云在中间的 3D 视图里。快捷键 1 彩色  2 深度  3 点云",
+        self._check(streams, t("彩色（左）"), self.show_left)
+        self._check(streams, t("彩色（右）"), self.show_right)
+        self._check(streams, t("深度"), self.show_depth)
+        self._check(streams, t("视差"), self.show_disp)
+        tk.Label(streams, text=t("点云在中间的 3D 视图里。快捷键 1 彩色  2 深度  3 点云"),
                  bg=SIDE, fg=MUTED, font=self._f(8), wraplength=260, justify="left"
                  ).pack(fill="x", padx=14, pady=(2, 6))
 
-        ctrl = self._section(inner, "参数")
+        ctrl = self._section(inner, t("参数"))
         ctrl.pack(fill="x")
-        self.scale_zmin = self._scale(ctrl, "深度下限 (m)", 0.05, 2.0, self.zmin, self._on_range)
-        self.scale_zmax = self._scale(ctrl, "深度上限 (m)", 0.20, 8.0, self.zmax, self._on_range)
-        self.scale_pt = self._scale(ctrl, "点大小", 1, 5, 2, self._on_point, resolution=1)
-        tk.Label(ctrl, text="推理档位", bg=SIDE, fg=MUTED, font=self._f(9)).pack(anchor="w", padx=14, pady=(8, 2))
+        self.scale_zmin = self._scale(ctrl, t("深度下限 (m)"), 0.05, 2.0, self.zmin, self._on_range)
+        self.scale_zmax = self._scale(ctrl, t("深度上限 (m)"), 0.20, 8.0, self.zmax, self._on_range)
+        self.scale_pt = self._scale(ctrl, t("点大小"), 1, 5, 2, self._on_point, resolution=1)
+        tk.Label(ctrl, text=t("推理档位"), bg=SIDE, fg=MUTED, font=self._f(9)).pack(anchor="w", padx=14, pady=(8, 2))
         box = ttk.Combobox(ctrl, textvariable=self.preset_var, state="readonly",
-                           values=[a for a, _ in PRESET_ITEMS], width=12, font=self._f(9))
+                           values=[t(a) for a, _ in PRESET_ITEMS], width=12, font=self._f(9))
         box.pack(anchor="w", padx=14, pady=(0, 4))
         box.bind("<<ComboboxSelected>>", self._on_preset)
-        tk.Label(ctrl, text="切换档位会重新加载模型，大约需要几秒。\n滑条只改显示范围，近处为红色，远处为蓝色。",
+        tk.Label(ctrl, text=t("切换档位会重新加载模型，大约需要几秒。\n滑条只改显示范围，近处为红色，远处为蓝色。"),
                  bg=SIDE, fg=MUTED, font=self._f(8), wraplength=260, justify="left"
                  ).pack(fill="x", padx=14, pady=(0, 8))
 
-        act = self._section(inner, "采集与标定")
+        act = self._section(inner, t("采集与标定"))
         act.pack(fill="x", pady=(0, 12))
-        self._button(act, "保存当前帧", self._save_frame).pack(fill="x", padx=14, pady=3)
-        self._button(act, "标定工作台", self._open_calib, primary=True).pack(fill="x", padx=14, pady=3)
-        self._button(act, "环境自检", self._run_selftest).pack(fill="x", padx=14, pady=3)
-        self._button(act, "模型自检", self._run_model_test).pack(fill="x", padx=14, pady=(3, 8))
+        self._button(act, t("保存当前帧"), self._save_frame).pack(fill="x", padx=14, pady=3)
+        self._button(act, t("标定工作台"), self._open_calib, primary=True).pack(fill="x", padx=14, pady=3)
+        self._button(act, t("环境自检"), self._run_selftest).pack(fill="x", padx=14, pady=3)
+        self._button(act, t("模型自检"), self._run_model_test).pack(fill="x", padx=14, pady=(3, 8))
 
     def _check(self, parent: tk.Misc, text: str, var: tk.BooleanVar) -> None:
         ttk.Checkbutton(parent, text=text, variable=var, command=self._redraw,
@@ -544,10 +545,10 @@ class ViewerApp(tk.Tk):
         self.btn_3d.pack(side="left", padx=4, pady=6)
         self.view_title = tk.Label(bar, text="彩色  |  深度", bg=TOP, fg=TEXT, font=self._f(10))
         self.view_title.pack(side="left", padx=12)
-        self.btn_back = self._button(bar, "回到实时", self._clear_review)
-        self.btn_pause = self._button(bar, "暂停", self._toggle_pause)
+        self.btn_back = self._button(bar, t("回到实时"), self._clear_review)
+        self.btn_pause = self._button(bar, t("暂停"), self._toggle_pause)
         self.btn_pause.pack(side="right", padx=(4, 10), pady=6)
-        self.btn_reset = self._button(bar, "重置视角", self._reset_cloud)
+        self.btn_reset = self._button(bar, t("重置视角"), self._reset_cloud)
         self.btn_reset.pack(side="right", padx=4, pady=6)
 
         self.view_host = tk.Frame(center, bg=BLACK, width=640, height=420)
@@ -555,8 +556,8 @@ class ViewerApp(tk.Tk):
         self.view_host.grid_propagate(False)
         self.view_host.grid_rowconfigure(0, weight=1)
         self.view_host.grid_columnconfigure(0, weight=1)
-        self.view = tk.Label(self.view_host, text="尚未串流\n\n右上角开始串流，查看彩色、深度和点云\n"
-                              "保存的采集与快照在右侧点选即可回看",
+        self.view = tk.Label(self.view_host,
+                             text=t("尚未串流\n\n右上角开始串流，查看彩色、深度和点云\n保存的采集与快照在右侧点选即可回看"),
                              bg=BLACK, fg=MUTED, font=self._f(11), justify="center")
         self.view.grid(row=0, column=0, sticky="nsew")
         self.view.bind("<ButtonPress-1>", self._press)
@@ -569,8 +570,8 @@ class ViewerApp(tk.Tk):
         self.view.bind("<Leave>", lambda e: self.view.unbind_all("<MouseWheel>"))
         self.view.bind("<Motion>", self._hover)
 
-        hint = tk.Label(center, text="  3D  左键旋转    右键平移    滚轮缩放"
-                        "      深度图上移动鼠标可读距离      空格暂停      S 保存当前帧",
+        hint = tk.Label(center, text=t("  3D  左键旋转    右键平移    滚轮缩放"
+                                       "      深度图上移动鼠标可读距离      空格暂停      S 保存当前帧"),
                         bg=TOP, fg=MUTED, font=self._f(8), anchor="w")
         hint.grid(row=2, column=0, sticky="ew")
 
@@ -585,7 +586,7 @@ class ViewerApp(tk.Tk):
         head_cal = tk.Frame(right, bg=SIDE)
         head_cal.grid(row=0, column=0, sticky="ew", padx=12, pady=(14, 4))
         theme.accent_tick(head_cal)
-        tk.Label(head_cal, text="标定结果", bg=SIDE, fg=TEXT, font=self._f(9, True),
+        tk.Label(head_cal, text=t("标定结果"), bg=SIDE, fg=TEXT, font=self._f(9, True),
                  anchor="w").pack(side="left")
         self.calib_box = tk.Text(right, height=11, bg=BG, fg=TEXT, font=self._f(9),
                                  relief="flat", bd=0, wrap="word", padx=8, pady=6,
@@ -599,7 +600,7 @@ class ViewerApp(tk.Tk):
         head_snap = tk.Frame(right, bg=SIDE)
         head_snap.grid(row=2, column=0, sticky="nw", padx=12, pady=(12, 4))
         theme.accent_tick(head_snap)
-        tk.Label(head_snap, text="采集与快照", bg=SIDE, fg=TEXT, font=self._f(9, True),
+        tk.Label(head_snap, text=t("采集与快照"), bg=SIDE, fg=TEXT, font=self._f(9, True),
                  anchor="w").pack(side="left")
         list_wrap = tk.Frame(right, bg=SIDE)
         list_wrap.grid(row=3, column=0, sticky="nsew", padx=12)
@@ -616,13 +617,13 @@ class ViewerApp(tk.Tk):
 
         actions = tk.Frame(right, bg=SIDE)
         actions.grid(row=4, column=0, sticky="ew", padx=12, pady=6)
-        self._button(actions, "刷新", self._refresh_results).pack(side="left", padx=(0, 6))
-        self._button(actions, "打开目录", self._open_selected_dir).pack(side="left")
+        self._button(actions, t("刷新"), self._refresh_results).pack(side="left", padx=(0, 6))
+        self._button(actions, t("打开目录"), self._open_selected_dir).pack(side="left")
 
         head_log = tk.Frame(right, bg=SIDE)
         head_log.grid(row=5, column=0, sticky="ew", padx=12)
         theme.accent_tick(head_log)
-        tk.Label(head_log, text="通知", bg=SIDE, fg=TEXT, font=self._f(9, True),
+        tk.Label(head_log, text=t("通知"), bg=SIDE, fg=TEXT, font=self._f(9, True),
                  anchor="w").pack(side="left")
         self.log = tk.Text(right, height=8, bg=BG, fg=MUTED, font=self._f(8),
                            relief="flat", bd=0, wrap="word", padx=8, pady=6,
@@ -659,7 +660,7 @@ class ViewerApp(tk.Tk):
         self.log.configure(state="disabled")
 
     def _defaults(self) -> Tuple[float, float, str]:
-        zmin, zmax, label = 0.15, 3.0, "快速"
+        zmin, zmax, label = 0.15, 3.0, t("快速")
         self.config_path = _find("config.yaml")
         try:
             import yaml
@@ -677,9 +678,9 @@ class ViewerApp(tk.Tk):
                 scale = float(ffs.get("scale", 0.5) or 0.5)
                 iters = int(ffs.get("valid_iters", 4) or 4)
                 if scale >= 0.99 and iters >= 8:
-                    label = "精确"
+                    label = t("精确")
                 elif abs(scale - 0.75) < 0.05:
-                    label = "平衡"
+                    label = t("平衡")
         except Exception:  # noqa: BLE001
             pass
         return zmin, zmax, label
@@ -687,7 +688,7 @@ class ViewerApp(tk.Tk):
     def _preset_key(self) -> str:
         label = self.preset_var.get()
         for text, key in PRESET_ITEMS:
-            if text == label:
+            if text == label or t(text) == label:
                 return key
         return "fast"
 
@@ -713,7 +714,7 @@ class ViewerApp(tk.Tk):
 
     def _toggle_pause(self) -> None:
         self.paused = not self.paused
-        self.btn_pause.configure(text="继续" if self.paused else "暂停")
+        self.btn_pause.configure(text=t("继续") if self.paused else t("暂停"))
         if self.session is not None and getattr(self.session, "started", False):
             try:
                 if self.paused:
@@ -722,7 +723,7 @@ class ViewerApp(tk.Tk):
                     self.session.resume()
             except Exception:  # noqa: BLE001
                 pass
-        self.status_var.set("已暂停显示" if self.paused else self.status_var.get())
+        self.status_var.set(t("已暂停显示") if self.paused else self.status_var.get())
 
     def _reset_cloud(self) -> None:
         self.cloud_yaw, self.cloud_pitch = 0.55, 0.28
@@ -734,7 +735,7 @@ class ViewerApp(tk.Tk):
         self.review = None
         self.btn_back.pack_forget()
         self._fit_pending = True
-        self._log("已回到实时画面")
+        self._log(t("已回到实时画面"))
         self._redraw()
 
     def _redraw(self) -> None:
@@ -759,24 +760,24 @@ class ViewerApp(tk.Tk):
         image = self._compose(w, h)
         names = []
         if self.mode == "3d":
-            names = ["点云"]
+            names = [t("点云")]
         else:
             if self.show_left.get():
-                names.append("彩色")
+                names.append(t("彩色"))
             if self.show_right.get():
-                names.append("右彩色")
+                names.append(t("右彩色"))
             if self.show_depth.get():
-                names.append("深度")
+                names.append(t("深度"))
             if self.show_disp.get():
-                names.append("视差")
-        prefix = "回看 · " if self.review is not None else ""
-        self.view_title.configure(text=prefix + ("  |  ".join(names) if names else "未选择画面"))
+                names.append(t("视差"))
+        prefix = t("回看 · ") if self.review is not None else ""
+        self.view_title.configure(text=prefix + ("  |  ".join(names) if names else t("未选择画面")))
         if image is None:
             self._photo = None
             if self.session is None and self.review is None and self.live_frame is None:
                 self.view.configure(
                     image="",
-                    text="尚未串流\n\n右上角开始串流，查看彩色、深度和点云\n保存的采集与快照在右侧点选即可回看")
+                    text=t("尚未串流\n\n右上角开始串流，查看彩色、深度和点云\n保存的采集与快照在右侧点选即可回看"))
             else:
                 self.view.configure(image="", text="没有可显示的画面\n在左侧勾选彩色、深度或视差，或切到 3D")
             self._view_dirty = False
@@ -831,7 +832,7 @@ class ViewerApp(tk.Tk):
         frame, res = self._sources()
         tiles: List[Dict[str, Any]] = []
         if self.show_left.get() and frame is not None and getattr(frame, "left", None) is not None:
-            tiles.append({"name": "Color", "image": frame.left, "src_w": frame.left.shape[1]})
+            tiles.append({"name": "Color L", "image": frame.left, "src_w": frame.left.shape[1]})
         if self.show_right.get() and frame is not None and getattr(frame, "right", None) is not None:
             tiles.append({"name": "Color R", "image": frame.right, "src_w": frame.right.shape[1]})
         if self.show_depth.get() and res is not None and getattr(res, "depth", None) is not None:
@@ -860,8 +861,14 @@ class ViewerApp(tk.Tk):
             cell, ox, oy, scale = self._place(tile["image"], cell_w, body_h)
             canvas[header:header + body_h, x:x + cell_w] = cell
             cv2.rectangle(canvas, (x, 0), (x + cell_w, header), (20, 20, 20), -1)
-            cv2.putText(canvas, tile["name"], (x + 10, 18), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55, (235, 235, 235), 1, cv2.LINE_AA)
+            # 标题字号跟着格子宽度收缩：窄窗口下 "Color L"/"Disparity" 会顶出格子
+            label = tile["name"]
+            fscale, _ = 0.55, None
+            tw = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, fscale, 1)[0][0]
+            if tw > cell_w - 20:
+                fscale = max(0.35, fscale * (cell_w - 20) / float(tw))
+            cv2.putText(canvas, label, (x + 10, 18), cv2.FONT_HERSHEY_SIMPLEX,
+                        fscale, (235, 235, 235), 1, cv2.LINE_AA)
             self._hit.append({
                 "name": tile["name"].lower(),
                 "x0": x + ox,
@@ -948,10 +955,10 @@ class ViewerApp(tk.Tk):
     # ------------------------------------------------------------------ 串流
     def _toggle_stream(self) -> None:
         if self.busy:
-            self._log("正在连接或断开，请稍候")
+            self._log(t("正在连接或断开，请稍候"))
             return
         if self._calib_proc is not None and self._calib_proc.poll() is None:
-            self._log("标定工作台还开着，相机会被它占用")
+            self._log(t("标定工作台还开着，相机会被它占用"))
             return
         if self.session is not None and getattr(self.session, "started", False):
             self._request_stop()
@@ -960,11 +967,11 @@ class ViewerApp(tk.Tk):
 
     def _request_start(self) -> None:
         self.busy = True
-        self.btn_stream.configure(text="正在连接…", state="disabled", bg=RAISED, fg=MUTED)
+        self.btn_stream.configure(text=t("正在连接…"), state="disabled", bg=RAISED, fg=MUTED)
         self._paint_dot(WARN)
-        self.dev_text.configure(text="正在连接")
-        self.status_var.set("正在打开相机并加载模型")
-        self._log("正在打开相机并加载模型…")
+        self.dev_text.configure(text=t("正在连接"))
+        self.status_var.set(t("正在打开相机并加载模型"))
+        self._log(t("正在打开相机并加载模型…"))
         threading.Thread(target=self._start_worker, daemon=True).start()
 
     def _start_worker(self) -> None:
@@ -978,8 +985,8 @@ class ViewerApp(tk.Tk):
 
     def _request_stop(self) -> None:
         self.busy = True
-        self.btn_stream.configure(text="正在停止…", state="disabled", bg=RAISED, fg=MUTED)
-        self.status_var.set("正在停止串流")
+        self.btn_stream.configure(text=t("正在停止…"), state="disabled", bg=RAISED, fg=MUTED)
+        self.status_var.set(t("正在停止串流"))
         threading.Thread(target=self._stop_worker, daemon=True).start()
 
     def _stop_worker(self) -> None:
@@ -998,11 +1005,11 @@ class ViewerApp(tk.Tk):
         self.review = None
         self.btn_back.pack_forget()
         self._fit_pending = True
-        self.btn_stream.configure(text="停止串流", state="normal", bg=DANGER, fg="#ffffff",
+        self.btn_stream.configure(text=t("停止串流"), state="normal", bg=DANGER, fg="#ffffff",
                                   activebackground="#d44854", activeforeground="#ffffff")
         self._paint_dot(OK)
-        self.dev_text.configure(text="串流中")
-        self.status_var.set("串流中")
+        self.dev_text.configure(text=t("串流中"))
+        self.status_var.set(t("串流中"))
         try:
             params = session.get_params()
             self._slider_lock = True
@@ -1014,7 +1021,7 @@ class ViewerApp(tk.Tk):
             self._push_range()
         except Exception:  # noqa: BLE001
             self._slider_lock = False
-        self._log("串流已开始")
+        self._log(t("串流已开始"))
         err = session.last_error() if hasattr(session, "last_error") else None
         if err:
             self._log(err)
@@ -1024,13 +1031,13 @@ class ViewerApp(tk.Tk):
         self.live_frame = None
         self.live_res = None
         self.busy = False
-        self.btn_stream.configure(text="开始串流", state="normal", bg=ACCENT, fg=ON_ACCENT,
+        self.btn_stream.configure(text=t("开始串流"), state="normal", bg=ACCENT, fg=ON_ACCENT,
                                   activebackground="#4ad6ee", activeforeground=ON_ACCENT)
         self._paint_dot(MUTED)
-        self.dev_text.configure(text="未连接")
-        self.dev_sub.configure(text="开始串流后显示分辨率和帧率")
-        self.status_var.set("已停止")
-        self.meta_var.set("分辨率 —    帧率 —")
+        self.dev_text.configure(text=t("未连接"))
+        self.dev_sub.configure(text=t("开始串流后显示分辨率和帧率"))
+        self.status_var.set(t("已停止"))
+        self.meta_var.set(t("分辨率 —    帧率 —"))
         self._photo = None
         self.view.configure(image="", text="串流已停止\n\n右上角可以再次开始\n右侧结果仍可点开回看")
         if err:
@@ -1086,7 +1093,7 @@ class ViewerApp(tk.Tk):
         if session is None or not getattr(session, "started", False):
             return
         if self.busy:
-            self._log("正在忙，档位稍后再切")
+            self._log(t("正在忙，档位稍后再切"))
             return
         name = self._preset_key()
         try:
@@ -1096,8 +1103,8 @@ class ViewerApp(tk.Tk):
         if name == current:
             return
         self.busy = True
-        self.status_var.set(f"正在切换到{self.preset_var.get()}")
-        self._log(f"正在切换到{self.preset_var.get()}，模型会重新加载")
+        self.status_var.set(tf("正在切换到{name}", name=self.preset_var.get()))
+        self._log(tf("正在切换到{name}，模型会重新加载", name=self.preset_var.get()))
         threading.Thread(target=self._preset_worker, args=(name,), daemon=True).start()
 
     def _preset_worker(self, name: str) -> None:
@@ -1111,7 +1118,7 @@ class ViewerApp(tk.Tk):
     def _save_frame(self) -> None:
         session = self.session
         if session is None or not getattr(session, "started", False):
-            self._log("还没有串流，无法保存")
+            self._log(t("还没有串流，无法保存"))
             return
         def work():
             try:
@@ -1124,14 +1131,14 @@ class ViewerApp(tk.Tk):
     # ------------------------------------------------------------------ 标定与结果
     def _open_calib(self) -> None:
         if self._calib_proc is not None and self._calib_proc.poll() is None:
-            self._log("标定工作台已经开着")
+            self._log(t("标定工作台已经开着"))
             return
         if self.busy:
-            self._log("正在连接或断开，请稍候再打开标定")
+            self._log(t("正在连接或断开，请稍候再打开标定"))
             return
         if self.session is not None and getattr(self.session, "started", False):
             self._pending_calib = True
-            self._log("先停止串流，把相机交给标定工作台")
+            self._log(t("先停止串流，把相机交给标定工作台"))
             self._request_stop()
             return
         self._spawn_calib()
@@ -1153,7 +1160,7 @@ class ViewerApp(tk.Tk):
             self._log(f"打不开标定工作台：{exc}")
             return
         self._log("已打开标定工作台。采集、标定、检查、保存都在那个窗口里。")
-        self.status_var.set("标定工作台已打开")
+        self.status_var.set(t("标定工作台已打开"))
         self.after(600, self._poll_calib)
 
     def _poll_calib(self) -> None:
@@ -1162,15 +1169,15 @@ class ViewerApp(tk.Tk):
             self.after(600, self._poll_calib)
             return
         self._calib_proc = None
-        self.status_var.set("已停止")
-        self._log("标定工作台已关闭，正在刷新结果")
+        self.status_var.set(t("已停止"))
+        self._log(t("标定工作台已关闭，正在刷新结果"))
         self._refresh_results()
 
     def _refresh_results(self) -> None:
         self._set_text(self.calib_box, self._calib_summary())
         items: List[Tuple[str, str]] = []
         root = _data("output")
-        for sub, kind in (("calib", "采集"), ("captures", "快照"), ("snapshots", "快照")):
+        for sub, kind in (("calib", t("采集")), ("captures", t("快照")), ("snapshots", t("快照"))):
             base = os.path.join(root, sub)
             if not os.path.isdir(base):
                 continue
@@ -1187,7 +1194,7 @@ class ViewerApp(tk.Tk):
         for label, _path in items:
             self.result_list.insert("end", label)
         if not items:
-            self.result_list.insert("end", "（还没有采集或快照）")
+            self.result_list.insert("end", t("（还没有采集或快照）"))
             self._result_paths = []
 
     def _calib_summary(self) -> str:
@@ -1209,12 +1216,12 @@ class ViewerApp(tk.Tk):
             date = ""
         lines = [
             os.path.basename(path),
-            f"日期      {date or '未知'}",
-            f"图像      {cal.image_size[0]} x {cal.image_size[1]}",
-            f"基线      {cal.baseline_mm:.2f} mm",
-            f"双目 RMS  {cal.rms_stereo:.3f} px",
-            f"单目 RMS  左 {cal.rms_left:.3f} / 右 {cal.rms_right:.3f} px",
-            f"校正焦距  {cal.rect_fx:.1f} px",
+            tf("日期      {date}", date=date or "未知"),
+            tf("图像      {w} x {h}", w=cal.image_size[0], h=cal.image_size[1]),
+            tf("基线      {mm:.2f} mm", mm=cal.baseline_mm),
+            tf("双目 RMS  {rms:.3f} px", rms=cal.rms_stereo),
+            tf("单目 RMS  左 {left:.3f} / 右 {right:.3f} px", left=cal.rms_left, right=cal.rms_right),
+            tf("校正焦距  {fx:.1f} px", fx=cal.rect_fx),
         ]
         try:
             import calib_manage
@@ -1223,7 +1230,7 @@ class ViewerApp(tk.Tk):
             rows = []
         if rows:
             lines.append("")
-            lines.append(f"历史归档 {len(rows)} 份")
+            lines.append(tf("历史归档 {n} 份", n=len(rows)))
             for row in rows[:5]:
                 when = str(row.get("archived_at") or row.get("date") or "")
                 base = row.get("baseline_mm")
@@ -1259,7 +1266,7 @@ class ViewerApp(tk.Tk):
         else:
             path = _data("output")
         if not os.path.isdir(path):
-            self._log("目录不存在：" + path)
+            self._log(t("目录不存在：") + path)
             return
         try:
             os.startfile(path)  # type: ignore[attr-defined]
@@ -1269,14 +1276,14 @@ class ViewerApp(tk.Tk):
     def _run_selftest(self) -> None:
         if self.busy:
             return
-        self._log("正在做环境自检…")
+        self._log(t("正在做环境自检…"))
         threading.Thread(target=self._selftest_worker, args=("env",), daemon=True).start()
 
     def _run_model_test(self) -> None:
         if self.session is not None and getattr(self.session, "started", False):
-            self._log("请先停止串流，再做模型自检（显存不够两件事一起做）")
+            self._log(t("请先停止串流，再做模型自检（显存不够两件事一起做）"))
             return
-        self._log("正在做模型自检，第一次会比较久…")
+        self._log(t("正在做模型自检，第一次会比较久…"))
         threading.Thread(target=self._selftest_worker, args=("model",), daemon=True).start()
 
     def _selftest_worker(self, kind: str) -> None:
@@ -1355,32 +1362,32 @@ class ViewerApp(tk.Tk):
         elif kind == "start_failed":
             self.busy = False
             self.session = None
-            self.btn_stream.configure(text="开始串流", state="normal", bg=ACCENT)
+            self.btn_stream.configure(text=t("开始串流"), state="normal", bg=ACCENT)
             self._paint_dot(DANGER)
-            self.dev_text.configure(text="连接失败")
-            self.status_var.set("连接失败")
+            self.dev_text.configure(text=t("连接失败"))
+            self.status_var.set(t("连接失败"))
             self._log(str(payload))
         elif kind == "stopped":
             self._on_stopped(str(payload or ""))
         elif kind == "preset_done":
             self.busy = False
-            self.status_var.set("串流中")
+            self.status_var.set(t("串流中"))
             err = ""
             if isinstance(payload, dict):
                 err = str(payload.get("error") or "")
                 if not payload.get("applied") and not err:
-                    err = "档位没有切换"
+                    err = t("档位没有切换")
             if err:
                 self._log(err)
             else:
-                self._log(f"已切换到{self.preset_var.get()}")
+                self._log(tf("已切换到{name}", name=self.preset_var.get()))
                 self._fit_pending = True
         elif kind == "saved":
             text = str(payload or "")
             if text.startswith("ERROR") or not text:
-                self._log(text or "还没有结果，未保存")
+                self._log(text or t("还没有结果，未保存"))
             else:
-                self._log("已保存 " + text)
+                self._log(t("已保存 ") + text)
                 self._refresh_results()
         elif kind == "review":
             self.review = _wrap_review(payload)
@@ -1390,11 +1397,11 @@ class ViewerApp(tk.Tk):
             label = str(payload.get("label") or "")
             bits = []
             if payload.get("has_color"):
-                bits.append("彩色")
+                bits.append(t("彩色"))
             if payload.get("has_depth"):
-                bits.append("深度")
+                bits.append(t("深度"))
             if payload.get("has_cloud"):
-                bits.append("点云")
+                bits.append(t("点云"))
             self._log(f"正在回看 {label}（{'、'.join(bits) or '没有可显示的图像'}）")
             if payload.get("has_cloud"):
                 self._set_mode("3d")
@@ -1406,12 +1413,12 @@ class ViewerApp(tk.Tk):
                 self.show_right.set(bool(payload.get("has_right")))
                 self._set_mode("2d")
         elif kind == "review_failed":
-            self._log("读取失败：" + str(payload))
+            self._log(t("读取失败：") + str(payload))
         elif kind == "report":
             kind_name, rc, text = payload
-            title = "环境自检" if kind_name == "env" else "模型自检"
+            title = t("环境自检") if kind_name == "env" else t("模型自检")
             self._log(f"{title}结束，退出码 {rc}")
-            self._set_text(self.calib_box, text.strip() or "（没有输出）")
+            self._set_text(self.calib_box, text.strip() or t("（没有输出）"))
 
     def _on_close(self) -> None:
         if self._closing:
@@ -1419,7 +1426,7 @@ class ViewerApp(tk.Tk):
         self._closing = True
         proc = self._calib_proc
         if proc is not None and proc.poll() is None:
-            self._log("标定工作台还开着，请先关掉它再退出")
+            self._log(t("标定工作台还开着，请先关掉它再退出"))
             self._closing = False
             return
         if self.session is not None and getattr(self.session, "started", False):
@@ -1543,7 +1550,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="Stereo Viewer")
     ap.add_argument("--selftest", action="store_true", help="只建界面并画一帧测试图，然后退出")
+    ap.add_argument("--lang", default="", choices=("", "zh", "en"), help="界面语言 zh / en")
     args = ap.parse_args(argv)
+    if args.lang:
+        import i18n
+        i18n.set_language(args.lang)
     if args.selftest:
         scale = 1.0
     else:

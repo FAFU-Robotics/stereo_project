@@ -1399,12 +1399,47 @@ class CalibApp(tk.Tk):
         self._log(self.txt_cal_log, f"采集完成：{self.session.count} 对，报告 {paths['txt']}")
 
     # ------------------------------------------------------------------ 目录
+    def _capture_candidates(self) -> List[Dict[str, Any]]:
+        """收集所有能找到的采集会话。
+
+        默认只看 CAPTURE_ROOT。但打包版的数据根是 exe 所在目录，历史采集往往留在
+        源码树里 —— 于是「数据源」是空的、检查图画不出来。这里额外扫一遍
+        app_paths 的搜索根与仓库上两级，找到就合并去重；找不到再退化为空列表。
+        """
+        roots: List[str] = []
+
+        def add(path: str) -> None:
+            path = os.path.abspath(path)
+            if path and os.path.isdir(path) and path not in roots:
+                roots.append(path)
+
+        add(core.CAPTURE_ROOT)
+        try:
+            for r in app_paths.search_roots():
+                add(os.path.join(r, "output", "calib"))
+        except Exception:                   # noqa: BLE001
+            pass
+        add(os.path.join(PROJECT_ROOT, "..", "..", "output", "calib"))
+
+        out: List[Dict[str, Any]] = []
+        seen = set()
+        for root in roots:
+            for d in core.list_capture_dirs(root):
+                key = os.path.normcase(os.path.abspath(d["dir"]))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(d)
+        out.sort(key=lambda d: -d.get("mtime", 0))
+        return out
+
     def _refresh_dirs(self) -> None:
-        items = core.list_capture_dirs()
+        items = self._capture_candidates()
         names = [f"{d['name']}  ({d['pairs']} 对)" for d in items]
         self.cmb_dir.configure(values=names)
         self._dirs = items
         if not names:
+            self.var_status.set("还没有采集会话：去①页采集，或点「浏览…」选一个含 left_*.png 的文件夹")
             return
         # 记忆里存的可能是绝对路径、相对路径或下拉框标签；统一判定一次有效性。
         # 无效就落到最新一个 —— 否则下拉框显示的是个已经不存在的路径，
@@ -1499,7 +1534,7 @@ class CalibApp(tk.Tk):
         self.nb.select(self.tab_chk)
 
     # ------------------------------------------------------------------ 检查
-    def _start_check(self) -> None:
+    def _start_check(self, _retry: bool = False) -> None:
         if self.calib_out is None:
             self._update_check_hint()
             messagebox.showinfo("还没有标定结果",
@@ -1510,11 +1545,23 @@ class CalibApp(tk.Tk):
             return
         if not self._current_frames_dir() or not glob.glob(
                 os.path.join(self._current_frames_dir(), "left_*.png")):
-            self.var_status.set("请先在第①页选一个采集目录")
-            messagebox.showinfo("没有可用的采集图",
-                                "检查图需要一对真实的左右原图来校正。\n"
-                                "请在第①页顶部的目录下拉框里选一个有 left_*.png 的会话，"
-                                "或先在①页采集几对。")
+            # 目录选择器在②页「数据源」，不在①页 —— 原提示把用户指到了一个没有控件的地方
+            self.var_status.set("请先在②页「数据源」选一个有 left_*.png 的会话")
+            if _retry:
+                return
+            if messagebox.askyesno(
+                    "没有可用的采集图",
+                    "检查图需要一对真实的左右原图来校正。\n\n"
+                    "当前没有选中含 left_*.png 的采集目录。\n"
+                    "现在就选一个文件夹吗？\n"
+                    "（也可以先去②页「数据源」下拉框选，或在①页采集几对）"):
+                picked = filedialog.askdirectory(
+                    parent=self, initialdir=core.CAPTURE_ROOT,
+                    title="选择包含 left_*.png / right_*.png 的采集目录")
+                if picked:
+                    self.var_dir.set(picked)
+                    self._refresh_dirs()
+                    self._start_check(_retry=True)
             return
         if self.job is not None and self.job.is_alive():
             messagebox.showinfo("提示", "上一项任务还在运行")
