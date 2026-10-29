@@ -21,7 +21,7 @@
 | 真实图像端到端（校正→推理→深度→点云） | 26 对标定图抽 3 组，深度中位数 28.6/44.4/65.0 cm，点云 307 200 点 |
 | 标定 GUI 四页能起 | `--selftest` 退出码 0；环境信息面板 16 行路径全部正确 |
 | 既有 SDK 测试 | `tests/test_smoke.py` 8/8 |
-| 统一入口 | `--where` / `--selftest` / `--gui-selftest` 全部退出码 0 |
+| 统一入口 | `--where` / `--selftest` / `--gui-selftest`（主界面）/ `--calib-selftest`（标定工作台）全部退出码 0 |
 
 ### 还没验证的
 
@@ -59,7 +59,7 @@
 
 | 项 | 值 | 来源 |
 |---|---|---|
-| Python | 3.14.6（`C:\Users\never\AppData\Local\Python\pythoncore-3.14-64`） | 实测 |
+| Python | 3.14.6（独立安装，无 conda；实际路径用 `where python` 查） | 实测 |
 | GPU | RTX 5060 Laptop 8 GB，sm_120，驱动 591.74 | `nvidia-smi` |
 | torch | **2.9.1+cu128**（`cp314` wheel 存在） | cu128 索引实测 |
 | torchvision | **0.24.1+cu128** | cu128 索引实测 |

@@ -29,8 +29,8 @@ python tools\calib_gui.py
 `tkinter`/`cv2`/`numpy`/`yaml` 检查；缺哪个就打印该装什么，不会直接闪退。
 pillow 只做提示不拦截——缺它时界面照常可用。
 
-**找不到解释器时**：把 `.bat` 开头的 `set "PY=..."` 改成你自己那个 python.exe 的完整路径。
-**本机已验证可用的是** `C:\Users\never\AppData\Local\Python\pythoncore-3.14-64\python.exe`。
+**找不到解释器时**：`calib_gui.bat` 自己内置了三级探测（① `set "PY=..."` 那一行 ② 常见的用户级安装路径 ③ `where python`）。三级都不对时，直接改文件顶部 `set "PY=..."` 那一行。
+**已验证可用的版本**是 Python 3.14.6（独立安装）。用 `where python` 确认你实际用的是哪一个。
 
 **高分屏**：`calib_gui.py` 在创建窗口前声明了 Per-Monitor DPI 感知（`SetProcessDpiAwareness(2)`），
 并按实测缩放调整 `tk scaling`。不做这一步，Windows 会把 125%/150% 下的界面按位图拉伸，
