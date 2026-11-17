@@ -1,4 +1,4 @@
-# Stereo Depth Camera (DECXIN-3412V1 + Fast-FoundationStereo)
+# Open Stereo Camera
 
 A stereo depth system for Windows: dual-camera capture, stereo rectification, FFS-based
 disparity/depth inference, colored point clouds, stereo calibration, and a Python SDK.
@@ -27,8 +27,8 @@ the viewer to switch instantly, or set `ui.language: en` in `config.yaml`, or la
 ### Option B — run from source
 
 ```bat
-git clone <this repository>
-cd stereo_project
+git clone https://github.com/FAFU-Robotics/stereo_project.git
+cd stereo_project\code
 
 REM 1) PyTorch first (the default PyPI wheel is CPU-only)
 python -m pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cu128

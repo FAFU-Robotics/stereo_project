@@ -42,7 +42,7 @@ Full operating notes: [usage.md](usage.md).
 
 ## Route B — from source
 
-All commands run in the repository root (the folder containing `config.yaml`).
+All commands run in the `code/` directory (the folder containing `config.yaml`).
 
 ### B1. Choose the interpreter
 

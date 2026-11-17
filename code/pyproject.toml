@@ -11,7 +11,7 @@ description = "DECXIN-3412V1 双目深度相机 Python SDK：采集 / 校正 / �
 readme = "README_SDK.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
-authors = [{ name = "stereo_project" }]
+authors = [{ name = "Open Stereo Camera" }]
 keywords = ["stereo", "depth", "camera", "pointcloud", "calibration", "opencv"]
 
 # 只列 SDK 自身必需的运行时依赖。
@@ -39,7 +39,7 @@ gpu = ["torch>=2.1"]
 stereo-app = "app_entry:cli_main"
 
 [project.urls]
-Documentation = "https://github.com/your-org/stereo-project#readme"
+Documentation = "https://github.com/FAFU-Robotics/stereo_project#readme"
 
 # ---------------------------------------------------------------- 打包内容
 # 说明：这不是一个"纯 SDK 包"。Session 依赖仓库根目录下的这几个模块
