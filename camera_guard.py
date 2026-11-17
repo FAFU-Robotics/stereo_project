@@ -121,6 +121,18 @@ def release_camera_lock() -> None:
         pass
 
 
+def lock_held_by_self(lock_path: Optional[str] = None) -> bool:
+    """当前进程是不是已经持有相机锁。
+
+    启动时 prime() 会先抢锁并打开相机，随后 start() 再进来不能再抢一次：
+    acquire 对同一 PID 会故意失败。这里让第二次调用发现「锁就是我的」然后继续。
+    """
+    path = lock_path or _LOCK_PATH or _default_lock_path()
+    if not path or not os.path.exists(path):
+        return False
+    return _read_lock(path) == os.getpid()
+
+
 @contextmanager
 def camera_lock(lock_path: Optional[str] = None) -> Iterator[str]:
     try:

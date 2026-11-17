@@ -193,6 +193,16 @@ def setup_streams() -> Optional[TextIO]:
         return None
 
 
+def _prepare_ui_fonts():
+    """在创建 Tk 之前注册随包中文字体。失败时保持原样，不挡住启动。"""
+    try:
+        import gui_theme
+        gui_theme.prepare_fonts()
+        return gui_theme
+    except Exception:                          # noqa: BLE001
+        return None
+
+
 def install_excepthook(log_fh: Optional[TextIO]) -> None:
     """未捕获异常 → 日志 + 弹窗（无控制台时这是唯一可见的反馈）。"""
 
@@ -215,7 +225,10 @@ def install_excepthook(log_fh: Optional[TextIO]) -> None:
         try:
             import tkinter as tk
             from tkinter import messagebox
+            theme = _prepare_ui_fonts()
             r = tk.Tk()
+            if theme is not None:
+                theme.install_cjk(r)
             r.withdraw()
             messagebox.showerror(
                 "程序遇到未处理的错误",
@@ -349,10 +362,16 @@ def _model_selftest() -> int:
 def _show_text(title: str, text: str) -> None:
     import tkinter as tk
     from tkinter import scrolledtext
+    theme = _prepare_ui_fonts()
     win = tk.Tk()
+    if theme is not None:
+        theme.apply(win)
+        text_font = theme.font(10)
+    else:
+        text_font = ("sans-serif", 10)
     win.title(title)
     win.geometry("720x480")
-    box = scrolledtext.ScrolledText(win, wrap="word", font=("Consolas", 10))
+    box = scrolledtext.ScrolledText(win, wrap="word", font=text_font)
     box.pack(fill="both", expand=True)
     box.insert("1.0", text)
     box.configure(state="disabled")
@@ -377,7 +396,10 @@ def _notify_failure(rc: int) -> None:
     try:
         import tkinter as tk
         from tkinter import messagebox
+        theme = _prepare_ui_fonts()
         r = tk.Tk()
+        if theme is not None:
+            theme.install_cjk(r)
         r.withdraw()
         messagebox.showwarning(
             "这一项没有正常结束",
@@ -452,10 +474,15 @@ def _selftest() -> int:
     # 5) GUI 能否构建（不连相机）
     try:
         import tkinter as tk
+        theme = _prepare_ui_fonts()
         r = tk.Tk()
+        if theme is not None:
+            family = theme.install_cjk(r)
+            print(f"  [OK] tkinter 可建窗口  界面字体={family or '系统默认'}")
+        else:
+            print("  [OK] tkinter 可建窗口")
         r.withdraw()
         r.destroy()
-        print("  [OK] tkinter 可建窗口")
     except Exception as exc:                    # noqa: BLE001
         print(f"  [FAIL] tkinter 建窗口失败：{exc}")
         ok = False

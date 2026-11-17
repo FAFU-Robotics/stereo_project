@@ -917,9 +917,24 @@ def _paint_readout(bgr: np.ndarray, lines: Sequence[str], origin: Tuple[int, int
             y += 26
         return
     font_path = ""
-    for candidate in (r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\msyh.ttc",
-                      r"C:\Windows\Fonts\simhei.ttf"):
-        if os.path.isfile(candidate):
+    candidates = []
+    try:
+        import gui_theme as theme
+        theme.prepare_fonts()
+        chosen = theme.cjk_font_file()
+        if chosen:
+            candidates.append(chosen)
+    except Exception:  # noqa: BLE001
+        pass
+    candidates.extend((
+        r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    ))
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
             font_path = candidate
             break
     size = 28 if font_path else 18

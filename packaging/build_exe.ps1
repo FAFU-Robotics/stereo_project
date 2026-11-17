@@ -1,4 +1,4 @@
-# Build a Windows onedir EXE for this project.
+﻿# Build a Windows onedir EXE for this project.
 # Reuses the existing Python 3.14 + torch 2.9.1+cu128 install.
 # Run:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build_exe.ps1
@@ -13,7 +13,6 @@ if (-not (Test-Path -LiteralPath $BasePy)) {
 }
 
 $VenvPy = Join-Path $Root ".venv-build\Scripts\python.exe"
-$VenvPi = Join-Path $Root ".venv-build\Scripts\pyinstaller.exe"
 
 if (-not (Test-Path -LiteralPath $VenvPy)) {
     Write-Host "Creating build venv with --system-site-packages"
@@ -38,7 +37,8 @@ if (Test-Path -LiteralPath $Built) {
 }
 
 Write-Host "Running PyInstaller (CUDA libs are about 4 GB; copying takes a while)"
-& $VenvPi --noconfirm --clean `
+# 不用 Scripts\pyinstaller.exe：工程路径里有空格时，那个启动器会直接退出且没有报错。
+& $VenvPy -m PyInstaller --noconfirm --clean `
     --distpath $Dist `
     --workpath $Work `
     (Join-Path $Root "packaging\StereoCamera.spec")

@@ -70,6 +70,21 @@ camera:
   min_aspect_ratio: 2.0    # 左右拼接画面的最小宽高比；本机 1280x480=2.67；0=不检查
   auto_detect: false       # true = 扫描索引自动找 8:3 双目设备（single_index 也可写 auto）
   scan_max_index: 5        # auto_detect 的扫描范围 0..N
+  # 主界面起来后在后台打开左右相机（side_by_side 仍是一个 USB 设备，左右眼一起开）。
+  # 开始串流时如果这里已经成功，就不再重新打开、不再重做曝光预热。
+  auto_open: true
+  # 热插拔：用系统设备列表看相机还在不在，不调用 pnputil（那一跳太慢，不适合几百毫秒轮询）。
+  hotplug_watch: true
+  hotplug_interval_s: 0.4
+  # 实例 ID 里包含这段文字才算「我们的相机」。
+  # 本机 DECXIN 是 0BDA:5883。写上之后，串流中拔掉这只双目会立刻停流并释放句柄；
+  # 拔掉笔记本自带摄像头不会误伤。再插上时主界面会重新打开左右相机。
+  usb_match: "VID_0BDA&PID_5883"
+  left_usb: ""             # dual 模式可选。写了就能在只拔掉一路时只关那一路
+  right_usb: ""
+  # OpenCV 读到的就是 BGR。这里必须是 bgr。
+  # 设成 rgb 会再交换一次红蓝：蓝封面变成橙色，木色桌面变成青色。
+  color_order: bgr
   fourcc: MJPG             # 实测该相机常用 MJPG（2560x960@60 等）；YUY2 也支持
   width: 1280              # 实测支持：1280x480 = 左右各 640x480（FFS 的最佳输入尺寸）
   height: 480
@@ -231,12 +246,15 @@ ffs:
   #                       hidden_dims=[128], vit_size=vitl, low_memory=0
   model_file: model_best_bp2_serialize.pth
   # 每次推理的迭代次数：越小越快、精度略降（官方表：8 -> 49.4ms / 4 -> 41.1ms @3090）
-  valid_iters: 4
-  # 最大视差（代价体编码上限）：官方 readme 明确说 192 对大多数场景足够。
-  # 注意 cfg.yaml 里写的是 416，我们用 192 覆盖它（与官方 run_demo 默认一致）。
+  # 界面预设会覆盖下面两个数。默认平衡档：0.75 / 8。
+  # 精确档（1.0/8）已从界面移除，见 session.PRESETS 的注释。
+  preset: balanced
+  valid_iters: 8
+  # 最大视差，单位是模型输入像素。平衡档 0.15 m 处约 178 px，192 够用。
+  # 再加大搜索范围只会让无纹理区域更容易匹配到很近的错误视差。
   max_disp: 192
-  # 输入缩放比例：模型建议图像宽度 < 1000，故宽度大时应设 0.5
-  scale: 0.5
+  # 模型宽度 / 标定图宽度。平衡档 0.75。内参按这个比例缩放，不用重新标定。
+  scale: 0.75
 
   # =========================================================================
   # 阶段 7.3 实测的「速度 ↔ 精度」三档（数据来源 tools/bench_presets.py + bench_pipeline.py）
@@ -251,6 +269,8 @@ ffs:
   #       所以 0.5 档性价比最高（快 3.3 倍）。
   # ⚠️ 0.5 档的代价不是"距离精度"而是**空间分辨率**：输出尺寸减半，
   #    细边缘/细小物体/薄结构轮廓会变粗，低纹理区域更易失配。看细节用 0.75 或 1.0。
+  # 当前默认改成 scale=1.0、valid_iters=4：在标定分辨率上推理，迭代次数仍用快速档。
+  # 界面若再选「快速」，会回到 0.5，近处搜索范围和速度都恢复原样。
   #
   # 切换：改下面两个数即可（命令行也能临时覆盖 --scale / --valid-iters）
   #   平衡: scale: 0.75  valid_iters: 8
@@ -268,6 +288,9 @@ ffs:
   remove_invisible: 1
   # 预热次数：第一次推理因编译/缓存会明显变慢，不计入统计
   warmup_iters: 3
+  # 主界面打开相机之后，在后台把模型加载并预热。
+  # 开始串流时如果这一步已经完成，就只启动采集线程和推理线程。
+  preload: true
 
 # =============================================================================
 # 点云
@@ -281,7 +304,10 @@ pointcloud:
   #   实时显示靠下面的 max_points 做保护即可；需要下采样时用命令行开启，例如：
   #       python main.py --mode pointcloud --voxel 0.005
   voxel_size_m: 0.0
-  use_color: true          # 用左图 RGB 给点云着色
+  use_color: true          # 用左图给点云着色
+  # truecolor：每个点直接取左相机对应像素，和二维彩色是同一套颜色。
+  # model：改用推理时的 RGB 小图（会再交换一次通道，蓝色容易变成红色）。
+  color_mode: truecolor
   color_source: left
   max_points: 400000       # 上采样上限保护，防止点数爆炸拖垮显示
 

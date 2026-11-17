@@ -169,6 +169,10 @@ def list_connected_camera_devices() -> Dict[str, Dict[str, str]]:
     """
     out: Dict[str, Dict[str, str]] = {}
     try:
+        flags = {}
+        creation = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if creation:
+            flags["creationflags"] = creation
         proc = subprocess.run(
             ["pnputil", "/enum-devices", "/connected", "/class", "Camera"],
             capture_output=True,
@@ -176,6 +180,7 @@ def list_connected_camera_devices() -> Dict[str, Dict[str, str]]:
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            **flags,
         )
     except Exception:
         return out
@@ -375,6 +380,12 @@ class StereoCamera:
 
         self.eye_width: int = int(self.cfg.get("eye_width", 0) or 0)
         self.split: str = str(self.cfg.get("split", "left_right")).lower()
+        # 默认 bgr：OpenCV VideoCapture 已经是 BGR，不要再换。
+        # 只有确认驱动缓冲本身是 RGB 时才设 rgb，否则蓝物体会变成橙色。
+        order = str(self.cfg.get("color_order", "bgr") or "bgr").strip().lower()
+        if order not in ("bgr", "rgb"):
+            raise ValueError(f"camera.color_order 只能是 bgr 或 rgb，当前为 {order!r}")
+        self.color_order = order
 
         # 运行时状态
         self._caps: List[cv2.VideoCapture] = []
@@ -395,8 +406,16 @@ class StereoCamera:
 
     # ---------------------------------------------------------------- 打开/关闭
     def open(self) -> None:
-        """打开相机并做预热。失败抛 CameraError（带真实尝试记录，不猜原因）。"""
-        if self._opened:
+        """打开相机并做预热。失败抛 CameraError（带真实尝试记录，不猜原因）。
+
+        左右都还活着时直接返回，开始串流不会把已经打开的设备再关开一次。
+        dual 只掉了一路时只补开那一路，还活着的那路保持句柄。
+        """
+        if self._opened and self._all_caps_alive():
+            return
+        if (self.mode == "dual" and any(c is not None for c in self._caps)
+                and any(self._cap_alive(c) for c in self._caps if c is not None)):
+            self._reopen_missing_dual()
             return
         self.close()  # 清掉上一次失败/未关闭留下的句柄
         self.open_report = []
@@ -420,6 +439,39 @@ class StereoCamera:
                 print(f"[相机] {line}")
         except Exception:
             # 关键：任何一步失败都释放已经打开的设备（dual 模式只开成一路时尤其重要）
+            self.close()
+            raise
+
+    def _reopen_missing_dual(self) -> None:
+        """dual 模式补开已经断开的那一侧，不释放还活着的另一侧。"""
+        li = int(self.cfg.get("left_index", 0))
+        ri = int(self.cfg.get("right_index", 1))
+        if li == ri:
+            raise CameraError(f"dual 模式下左右索引相同（{li}），请在 config.yaml 中区分")
+        while len(self._caps) < 2:
+            self._caps.append(None)
+        fresh = []
+        try:
+            for name, index, slot in (("left", li, 0), ("right", ri, 1)):
+                cap = self._caps[slot]
+                if cap is not None and self._cap_alive(cap):
+                    continue
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    self._caps[slot] = None
+                opened = self._open_one(index, name=name)
+                self._caps[slot] = opened
+                fresh.append(opened)
+            self._warmup(fresh)
+            self._measure_and_validate()
+            self._opened = True
+            self._t_start = time.perf_counter()
+            for line in self.open_report:
+                print(f"[相机] {line}")
+        except Exception:
             self.close()
             raise
 
@@ -478,10 +530,13 @@ class StereoCamera:
             + "\n  可把 config.yaml 的 single_index 改回具体索引（本机 1 = DECXIN）后重试。"
         )
 
-    def _warmup(self) -> None:
-        """丢弃前若干帧，等自动曝光/白平衡收敛。"""
+    def _warmup(self, caps: Optional[List[cv2.VideoCapture]] = None) -> None:
+        """丢弃前若干帧，等自动曝光/白平衡收敛。只预热 caps 里给出的新句柄。"""
+        targets = self._caps if caps is None else caps
         for _ in range(max(0, self.warmup_frames)):
-            for cap in self._caps:
+            for cap in targets:
+                if cap is None:
+                    continue
                 try:
                     cap.read()
                 except Exception:
@@ -701,12 +756,107 @@ class StereoCamera:
     def close(self) -> None:
         """释放所有相机句柄。可重复调用（幂等）。"""
         for cap in self._caps:
+            if cap is None:
+                continue
             try:
                 cap.release()
             except Exception:
                 pass
         self._caps = []
         self._opened = False
+
+    @staticmethod
+    def _cap_alive(cap: object) -> bool:
+        try:
+            return bool(cap.isOpened())  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _all_caps_alive(self) -> bool:
+        if self.mode == "side_by_side":
+            return (len(self._caps) == 1 and self._caps[0] is not None
+                    and self._cap_alive(self._caps[0]))
+        return (len(self._caps) == 2
+                and all(c is not None and self._cap_alive(c) for c in self._caps))
+
+    def open_sides(self) -> List[str]:
+        """当前还连着的逻辑相机。side_by_side 的一个句柄同时代表左和右。"""
+        if self.mode == "side_by_side":
+            if self._caps and self._caps[0] is not None and self._cap_alive(self._caps[0]):
+                return ["left", "right"]
+            return []
+        out: List[str] = []
+        if len(self._caps) > 0 and self._caps[0] is not None and self._cap_alive(self._caps[0]):
+            out.append("left")
+        if len(self._caps) > 1 and self._caps[1] is not None and self._cap_alive(self._caps[1]):
+            out.append("right")
+        return out
+
+    def disconnect_side(self, side: str) -> List[str]:
+        """关掉对应的那一路。已经关掉再叫一次返回空列表。
+
+        side_by_side 左右共用一个 USB 句柄，关掉任一侧都会把两路一起释放。
+        """
+        side = str(side or "").lower()
+        if self.mode == "side_by_side" or side in ("single", "both"):
+            had = self.open_sides()
+            if not had and not self._caps:
+                return []
+            self.close()
+            return had or ["left", "right"]
+        idx = 0 if side == "left" else 1 if side == "right" else -1
+        if idx < 0 or idx >= len(self._caps) or self._caps[idx] is None:
+            return []
+        try:
+            self._caps[idx].release()
+        except Exception:  # noqa: BLE001
+            pass
+        self._caps[idx] = None
+        if not self.open_sides():
+            self._opened = False
+            self._caps = []
+        return [side]
+
+    def dead_sides(self) -> List[str]:
+        """句柄还在表里但 isOpened() 已经是假的那些侧。不 read()，避免和采集线程抢设备。"""
+        if not self._caps:
+            return []
+        if self.mode == "side_by_side":
+            cap = self._caps[0]
+            if cap is None or not self._cap_alive(cap):
+                return ["left", "right"]
+            return []
+        dead: List[str] = []
+        for name, idx in (("left", 0), ("right", 1)):
+            if idx >= len(self._caps) or self._caps[idx] is None or not self._cap_alive(self._caps[idx]):
+                dead.append(name)
+        return dead
+
+    def probe_sides(self) -> List[str]:
+        """没在串流时用：对每一路读一帧，读不到的一侧视为断开。串流中不要调用。"""
+        if self.mode == "side_by_side":
+            if not self._caps or self._caps[0] is None or not self._cap_alive(self._caps[0]):
+                return ["left", "right"]
+            try:
+                ok, frame = self._caps[0].read()
+            except Exception:  # noqa: BLE001
+                return ["left", "right"]
+            if not ok or frame is None or getattr(frame, "size", 1) == 0:
+                return ["left", "right"]
+            return []
+        dead: List[str] = []
+        for name, idx in (("left", 0), ("right", 1)):
+            cap = self._caps[idx] if idx < len(self._caps) else None
+            if cap is None or not self._cap_alive(cap):
+                dead.append(name)
+                continue
+            try:
+                ok, frame = cap.read()
+            except Exception:  # noqa: BLE001
+                ok, frame = False, None
+            if not ok or frame is None or getattr(frame, "size", 1) == 0:
+                dead.append(name)
+        return dead
 
     def __enter__(self) -> "StereoCamera":
         self.open()
@@ -732,6 +882,8 @@ class StereoCamera:
             raise CameraError("相机尚未打开，请先调用 open()")
 
         if self.mode == "side_by_side":
+            if not self._caps or self._caps[0] is None or not self._cap_alive(self._caps[0]):
+                raise CameraReadError("single 相机已断开。")
             frame = self._read_with_retry(self._caps[0], who="single")
             left, right = self._split_frame(frame)
             now = time.perf_counter()
@@ -742,6 +894,10 @@ class StereoCamera:
             return FramePair(left, right, now, now, self._seq, self.mode, synced=True)
 
         # dual 模式
+        if len(self._caps) < 1 or self._caps[0] is None or not self._cap_alive(self._caps[0]):
+            raise CameraReadError("left 相机已断开。")
+        if len(self._caps) < 2 or self._caps[1] is None or not self._cap_alive(self._caps[1]):
+            raise CameraReadError("right 相机已断开。")
         lf = self._read_with_retry(self._caps[0], who="left")
         t_l = time.perf_counter()
         rf = self._read_with_retry(self._caps[1], who="right")
@@ -765,10 +921,16 @@ class StereoCamera:
                 last_err = f"第 {attempt + 1} 次读取异常 {type(exc).__name__}: {exc}"
                 continue
             if ok and frame is not None and frame.size > 0:
-                return frame
+                return self._as_bgr(frame)
             last_err = f"第 {attempt + 1} 次读取失败"
         self.stats["read_fail"] += 1
         raise CameraReadError(f"{who} 相机连续读取失败（{last_err}）。可能掉线或被其他程序抢占。")
+
+    def _as_bgr(self, frame: np.ndarray) -> np.ndarray:
+        """把读到的帧统一成 BGR。color_order=rgb 时交换红蓝通道。"""
+        if frame.ndim != 3 or frame.shape[2] < 3 or self.color_order != "rgb":
+            return frame
+        return np.ascontiguousarray(frame[:, :, :3][:, :, ::-1])
 
     def _split_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """把"左右拼接"画面切成左右两幅。"""

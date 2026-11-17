@@ -377,6 +377,7 @@ class FrameGrid(tk.Toplevel):
 class CalibApp(tk.Tk):
 
     def __init__(self, start_dir: str = "") -> None:
+        theme.prepare_fonts()
         super().__init__()
         # DPI 与主题必须在建任何控件之前完成：控件一旦创建就已经按当时的字体
         # 与默认调色板渲染，事后再改 Style 只能改到一部分，会留下深浅混搭。
@@ -472,8 +473,8 @@ class CalibApp(tk.Tk):
         win.title(t("环境信息"))
         theme_pad = 10
         win.configure(background=theme.BG)
-        txt = tk.Text(win, wrap="none", width=96, height=20, font=("Consolas", 9))
-        theme.style_text(txt)
+        txt = tk.Text(win, wrap="none", width=96, height=20)
+        theme.style_text(txt, mono=False)
         txt.pack(fill="both", expand=True, padx=theme_pad, pady=(theme_pad, 6))
         txt.insert("1.0", body)
         txt.configure(state="disabled")
@@ -1334,7 +1335,7 @@ class CalibApp(tk.Tk):
 
         box = ttk.Frame(win)
         box.pack(fill="both", expand=True, padx=10)
-        lb = tk.Listbox(box, font=("Consolas", 10), activestyle="dotbox")
+        lb = tk.Listbox(box, font=theme.font(10), activestyle="dotbox")
         lb.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(box, orient="vertical", command=lb.yview)
         sb.pack(side="right", fill="y")

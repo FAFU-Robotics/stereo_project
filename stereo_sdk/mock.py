@@ -70,8 +70,18 @@ class MockSession:
             "preset": "balanced", "scale": 0.75,
         }
         self._error: Optional[str] = None
+        self._cameras_ready = False
+        self._model_ready = False
+        self._warmed = False
 
     # ------------------------------------------------------------------ 生命周期
+    def prime(self, preload_model: bool = True) -> Dict[str, Any]:
+        """假实现：不碰真实相机，只把“左右已打开、模型已就绪”标上。"""
+        self._cameras_ready = True
+        self._model_ready = bool(preload_model)
+        self._warmed = bool(preload_model)
+        return self.link_status()
+
     def start(self) -> None:
         with self._lock:
             self._started = True
@@ -82,9 +92,47 @@ class MockSession:
         self._maybe_produce()
         self._maybe_produce_result()
 
-    def stop(self) -> None:
+    def stop(self, release_cameras: bool = True, release_model: bool = True) -> None:
         with self._lock:
             self._started = False
+            if release_cameras:
+                self._cameras_ready = False
+            if release_model:
+                self._model_ready = False
+                self._warmed = False
+
+    def apply_usb_removal(self, removed_ids) -> Dict[str, Any]:
+        """假拔线：正在串流就停掉，状态和真 Session 一样回到未开始。"""
+        streaming = self._started
+        if streaming and removed_ids:
+            self.stop(release_cameras=True, release_model=False)
+            self._error = "左右相机 USB 已断开"
+            return {"changed": True, "closed": ["left", "right"], "remaining": [],
+                    "streaming_stopped": True, "reason": self._error, "needs_probe": False}
+        return {"changed": False, "closed": [], "remaining": ["left", "right"] if self._cameras_ready else [],
+                "streaming_stopped": False, "reason": "", "needs_probe": False}
+
+    def poll_runtime_loss(self) -> bool:
+        return False
+
+    def consume_runtime_loss(self) -> Dict[str, Any]:
+        return {"changed": False, "closed": [], "remaining": [],
+                "streaming_stopped": False, "reason": "", "needs_probe": False}
+
+    @property
+    def cameras_ready(self) -> bool:
+        return self._cameras_ready
+
+    @property
+    def model_ready(self) -> bool:
+        return self._model_ready
+
+    def link_status(self) -> Dict[str, Any]:
+        return {
+            "left": self._cameras_ready, "right": self._cameras_ready,
+            "model": self._model_ready, "warmed": self._warmed,
+            "started": self._started, "detail": "mock", "error": self._error,
+        }
 
     @property
     def started(self) -> bool:

@@ -321,6 +321,44 @@ def filter_depth_range(depth: np.ndarray, zmin_m: float, zmax_m: float) -> np.nd
     return np.isfinite(d) & (d >= float(zmin_m)) & (d <= float(zmax_m))
 
 
+def scaled_speckle_size(shape: Tuple[int, ...], base: int = 200,
+                        ref_hw: Tuple[int, int] = (480, 640)) -> int:
+    """把「640×480 上的 base 像素」按面积缩到当前视差图。
+
+    同一块物理散斑在 0.5 档只有大约四分之一的像素。阈值不跟着缩，
+    低分辨率档会删掉过大的一块，高分辨率档又删不掉小碎片。
+    """
+    h = int(shape[0]) if len(shape) else 0
+    w = int(shape[1]) if len(shape) > 1 else 0
+    ref = max(int(ref_hw[0]) * int(ref_hw[1]), 1)
+    if base <= 0 or h <= 0 or w <= 0:
+        return 0
+    return max(8, int(round(float(base) * (h * w) / float(ref))))
+
+
+def filter_disp_spikes(disp: np.ndarray, valid: np.ndarray,
+                       ksize: int = 5, tol_px: float = 4.0) -> np.ndarray:
+    """去掉相对邻域中值跳变过大的视差。
+
+    无纹理和视差边缘上的单点误匹配，深度会突然拉到相机跟前，
+    点云看起来像向外炸开。平面上的正常起伏小于几个像素，会留下来。
+    """
+    d = np.asarray(disp, np.float32)
+    m = np.asarray(valid, bool)
+    if d.shape != m.shape or not m.any() or tol_px <= 0:
+        return m
+    k = int(ksize)
+    if k < 3:
+        return m
+    if k % 2 == 0:
+        k += 1
+    k = min(k, 5)   # OpenCV 对 float32 的中值滤波只接受 3 或 5
+    fill = float(np.median(d[m]))
+    filled = np.where(m, d, fill).astype(np.float32)
+    med = cv2.medianBlur(filled, k)
+    return m & (np.abs(d - med) <= float(tol_px))
+
+
 def filter_speckles(valid: np.ndarray, min_size: int = 200) -> np.ndarray:
     """去掉孤立的"散斑"小连通区域。
 

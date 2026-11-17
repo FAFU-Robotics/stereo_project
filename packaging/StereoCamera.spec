@@ -43,6 +43,7 @@ hiddenimports = [
     "main",
     "camera",
     "camera_guard",
+    "camera_link",
     "viewer",
     "calibration",
     "stereo_depth",
@@ -100,6 +101,9 @@ hiddenimports = [
 # 权重、配置、标定、FFS 源码必须是磁盘上的真实文件。
 # FFS 在运行时把仓库根插进 sys.path 再 import core / Utils，不能只打进 PYZ。
 datas += [(os.path.join(ROOT, "config.yaml"), ".")]
+font_dir = os.path.join(ROOT, "assets", "fonts")
+if os.path.isdir(font_dir):
+    datas += _tree(font_dir, os.path.join("assets", "fonts"))
 datas += _tree(os.path.join(ROOT, "calibration"), "calibration")
 datas += _tree(os.path.join(ROOT, "weights"), "weights")
 datas += _tree(

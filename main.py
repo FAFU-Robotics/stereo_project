@@ -696,7 +696,7 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
     from depth_utils import (CameraParams, attach_range_bar, colorize_depth, depth_stats,
                              disp_correction_from_config, disparity_to_depth, filter_speckles,
                              load_rectifier, save_depth_npy)
-    from pointcloud import PointCloudBuilder
+    from pointcloud import PointCloudBuilder, cloud_color_bgr
     from stereo_depth import FFSError, FFSDepthEstimator
 
     # 阶段 5：加载"左右图校正器"（已标定且开启 rectify_before_infer 时才有）
@@ -942,7 +942,8 @@ def run_pointcloud(cfg: Dict[str, Any], args: argparse.Namespace) -> int:
                 speckle_pct = 100.0 * (n_after_extrap - n_after_speckle) / max(n_after_extrap, 1)
                 st = depth_stats(depth, valid)
                 t_pc0 = time.perf_counter()
-                pcd, pc_stats = builder.build(depth, params_model, out["left_model_rgb"])
+                color_bgr = cloud_color_bgr(pair.left, out.get("left_model_rgb"), depth.shape)
+                pcd, pc_stats = builder.build(depth, params_model, color_bgr)
                 pc_ms = (time.perf_counter() - t_pc0) * 1000.0
                 n_processed += 1
                 last = {"left": pair.left, "right": pair.right, "disp": out["disp"],

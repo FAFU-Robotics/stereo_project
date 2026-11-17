@@ -63,6 +63,35 @@ _EN: Dict[str, str] = {
     "连接失败": "Connection failed",
     "设备": "Device",
     "开始串流后显示分辨率和帧率": "Resolution and FPS appear after streaming starts",
+    "正在打开左右相机": "Opening left and right cameras",
+    "左右相机已打开": "Left and right cameras are open",
+    "相机已就绪，可以开始串流": "Cameras are ready. You can start streaming",
+    "相机与模型已就绪，开始串流会很快": "Cameras and model are ready. Streaming will start quickly",
+    "相机正在打开，完成后立即开始串流": "Cameras are opening. Streaming starts as soon as they are ready",
+    "正在启动串流": "Starting stream",
+    "相机和模型已就绪，正在启动串流": "Cameras and model are ready. Starting stream",
+    "未自动打开相机。点开始串流时再连接。": "Cameras stay closed until you start streaming.",
+    "左相机已断开": "Left camera disconnected",
+    "右相机已断开": "Right camera disconnected",
+    "相机已断开": "Camera disconnected",
+    "相机打开失败": "Couldn't open the cameras",
+    "正在确认相机是否断开": "Checking whether the camera disconnected",
+    "USB 设备已断开，串流已停止": "USB device removed. Streaming stopped",
+    "串流已停止，相机仍保持打开": "Streaming stopped. Cameras stay open",
+    "左相机 USB 已断开": "Left camera USB disconnected",
+    "右相机 USB 已断开": "Right camera USB disconnected",
+    "左右相机 USB 已断开": "Left and right camera USB disconnected",
+    "USB 设备断开，读帧确认相机已掉线": "USB removed. A failed read confirmed the camera is gone",
+    "相机无画面，已停止串流": "No frames from the camera. Streaming stopped",
+    "相机已重新接上，正在打开左右相机": "Camera plugged back in. Opening left and right cameras",
+    "先释放相机，把设备交给标定工作台": "Releasing the cameras so calibration can use them",
+    "标定前会先释放相机。": "Cameras are released before calibration.",
+    "就绪。开始串流后可在 2D / 3D 之间切换。标定前会先释放相机。":
+        "Ready. Start streaming to switch between 2D and 3D. Cameras are released before calibration.",
+    "串流已停止\n\n相机仍开着，再次开始会很快\n右侧结果仍可点开回看":
+        "Streaming stopped.\n\nCameras stay open, so the next start is quick.\nSaved results on the right can still be opened.",
+    "相机已断开\n\n重新接上后可以再次开始串流":
+        "Camera disconnected.\n\nPlug it back in, then start streaming again",
 
     # ---- 画面 / 视图 ----
     "画面": "Views",
@@ -351,6 +380,8 @@ _EN_TF: Dict[str, str] = {
         "{eye}    capture {cap:.1f} fps    inference {inf:.2f} fps    median {med:.3f} m    {preset}",
     "{eye}    有效 {valid:.0f}%    点数 {pts}":
         "{eye}    valid {valid:.0f}%    points {pts}",
+    "{eye}\n有效 {valid:.0f}%\n点数 {pts}":
+        "{eye}\nvalid {valid:.0f}%\npoints {pts}",
     "正在读取 {name}": "Reading {name}",
     "停止时出错：{exc}": "Error while stopping: {exc}",
     "\n\n采集根目录：{p0}\n标定文件  ：{p1}\n归档目录  ：{p2}\n日志目录  ：{p3}\n界面记忆  ：{p4}":

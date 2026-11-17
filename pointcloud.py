@@ -92,6 +92,55 @@ def _insert_ply_comments(path: str, comments) -> bool:
     return True
 
 
+def _resize_bgr(bgr: np.ndarray, h: int, w: int) -> np.ndarray:
+    """最近邻缩放到深度图尺寸。不交换通道，避免把蓝色像素画成红色。"""
+    src = np.ascontiguousarray(np.asarray(bgr)[:, :, :3])
+    if tuple(src.shape[:2]) == (h, w):
+        return src
+    ys = np.linspace(0, src.shape[0] - 1, h)
+    xs = np.linspace(0, src.shape[1] - 1, w)
+    yi = np.clip(np.rint(ys).astype(np.int32), 0, src.shape[0] - 1)
+    xi = np.clip(np.rint(xs).astype(np.int32), 0, src.shape[1] - 1)
+    return np.ascontiguousarray(src[yi][:, xi])
+
+
+def cloud_color_bgr(frame_bgr: Optional[np.ndarray],
+                    model_rgb: Optional[np.ndarray],
+                    depth_shape: Tuple[int, ...],
+                    prefer_frame: bool = True) -> Optional[np.ndarray]:
+    """准备与深度图同尺寸的 BGR 着色图。默认是真实色彩。
+
+    真实色彩：用相机左图（BGR）按像素取样，只缩放、不交换红蓝。
+    二维彩色画面和点云因此是同一批像素，蓝色物体保持蓝色。
+    没有左图时，才把模型返回的 RGB 转成 BGR。
+    """
+    h, w = int(depth_shape[0]), int(depth_shape[1])
+    if prefer_frame and frame_bgr is not None:
+        src = np.asarray(frame_bgr)
+        if src.ndim == 3 and src.shape[2] >= 3:
+            return _resize_bgr(src, h, w)
+    if model_rgb is not None:
+        rgb = np.asarray(model_rgb)
+        if rgb.ndim == 3 and rgb.shape[2] >= 3 and tuple(rgb.shape[:2]) == (h, w):
+            return np.ascontiguousarray(rgb[:, :, :3][:, :, ::-1])
+        if rgb.ndim == 3 and rgb.shape[2] >= 3:
+            return _resize_bgr(rgb[:, :, ::-1], h, w)
+    if frame_bgr is None:
+        return None
+    src = np.asarray(frame_bgr)
+    if src.ndim != 3 or src.shape[2] < 3:
+        return None
+    return _resize_bgr(src, h, w)
+
+
+def bgr_u8_from_open3d(colors: Optional[np.ndarray]) -> np.ndarray:
+    """Open3D 颜色是 RGB、范围 0~1。契约里的点云颜色是 BGR uint8。"""
+    if colors is None or len(colors) == 0:
+        return np.zeros((0, 3), np.uint8)
+    rgb = np.clip(np.asarray(colors, np.float32).reshape(-1, 3) * 255.0, 0, 255)
+    return np.ascontiguousarray(rgb.astype(np.uint8)[:, ::-1])
+
+
 class PointCloudBuilder:
     """深度图 -> 彩色点云（可复用同一几何对象做实时更新）。
 
@@ -113,6 +162,9 @@ class PointCloudBuilder:
         self.calibrated = bool(calibrated)
         # 复用对象（第一次创建后一直沿用，避免每帧新建）
         self._pcd = None
+        self._bgr_u8: Optional[np.ndarray] = None
+        # 与 points 一一对应的相机原色，BGR uint8。显示直接用它，不再经 Open3D 转回来。
+        self.last_colors_bgr: Optional[np.ndarray] = None
         self.stats: Dict[str, Any] = {"points": 0, "filtered_points": 0, "build_ms": 0.0, "downsampled": 0}
 
     # ------------------------------------------------------------ 反投影
@@ -135,6 +187,7 @@ class PointCloudBuilder:
         if d.ndim != 2:
             raise ValueError(f"深度图必须是 2D，当前形状 {d.shape}")
         h, w = d.shape[:2]
+        self._bgr_u8 = None
 
         mask = np.isfinite(d) & (d > 0)
         if color_bgr is not None:
@@ -145,6 +198,7 @@ class PointCloudBuilder:
 
         vs, us = np.nonzero(mask)
         if vs.size == 0:
+            self._bgr_u8 = np.zeros((0, 3), np.uint8) if self.use_color else None
             return np.zeros((0, 3), dtype=np.float32), (np.zeros((0, 3), dtype=np.float64) if self.use_color else None)
 
         z = d[vs, us].astype(np.float32)
@@ -154,9 +208,10 @@ class PointCloudBuilder:
 
         colors = None
         if self.use_color and color_bgr is not None:
-            # OpenCV 是 BGR，Open3D 需要 RGB，并归一化到 0..1
-            rgb = c[vs, us][:, ::-1].astype(np.float64) / 255.0
-            colors = rgb
+            # 显示用的颜色就是左图像素，保持 BGR，不做通道交换。
+            self._bgr_u8 = np.ascontiguousarray(np.asarray(c[vs, us][:, :3], np.uint8))
+            # Open3D 自己的颜色仍要 RGB、0~1。由上面的 BGR 再反一次，只供给 Open3D。
+            colors = self._bgr_u8[:, ::-1].astype(np.float64) / 255.0
         return pts, colors
 
     # ------------------------------------------------------------ 组装点云
@@ -190,6 +245,9 @@ class PointCloudBuilder:
             pts = pts[idx]
             if colors is not None:
                 colors = colors[idx]
+            if self._bgr_u8 is not None:
+                self._bgr_u8 = self._bgr_u8[idx]
+        self.last_colors_bgr = None if self._bgr_u8 is None else np.ascontiguousarray(self._bgr_u8)
 
         # 3) 复用同一个 PointCloud 对象
         if self._pcd is None:
@@ -208,6 +266,8 @@ class PointCloudBuilder:
             pcd = pcd.voxel_down_sample(voxel_size=self.voxel_size_m)
             down = n0 - len(pcd.points)
             self._pcd = pcd
+            # 下采样会合并点，原像素下标对不上，退回 Open3D 里的 RGB 再转回 BGR。
+            self.last_colors_bgr = bgr_u8_from_open3d(pcd.colors)
 
         self.stats = {
             "points": len(pcd.points),

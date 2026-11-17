@@ -48,7 +48,7 @@ from depth_utils import attach_range_bar, colorize_depth  # noqa: E402
 from profiler import Profiler           # noqa: E402
 from logger import get_logger, setup  # noqa: E402  日志落盘（稳定性③）
 
-_PRESET_CYCLE = ("precise", "balanced", "fast")
+_PRESET_CYCLE = ("balanced", "fast")
 
 
 def disparity_to_bgr(disp: np.ndarray) -> np.ndarray:

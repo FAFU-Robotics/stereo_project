@@ -50,6 +50,7 @@ NSCL 第 1 条对 “derivative works” 的定义作了排除：
 | SciPy | 运行环境依赖 | BSD-3-Clause | 数值计算 |
 | PyYAML | 运行环境依赖 | MIT | 读取 `config.yaml` |
 | tkinter | Python 标准库 | PSF | 标定 GUI 与菜单 |
+| Noto Sans SC | `assets/fonts/` | SIL Open Font License 1.1 | 系统没有可被 Tk 使用的中文字体时，界面与画面标注的回退字体 |
 | PyInstaller | 构建期依赖 | GPL-2.0 with exception | 打包 EXE（其例外条款允许分发打包产物） |
 
 ## 5. 引用

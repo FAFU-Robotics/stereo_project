@@ -49,7 +49,7 @@ if PROJECT_ROOT not in sys.path:
 
 from depth_utils import (CameraParams, colorize_depth, disp_correction_from_config,  # noqa: E402
                          disparity_to_depth, load_rectifier)
-from pointcloud import PointCloudBuilder  # noqa: E402
+from pointcloud import PointCloudBuilder, cloud_color_bgr  # noqa: E402
 from stereo_depth import FFSDepthEstimator  # noqa: E402
 
 
@@ -181,7 +181,7 @@ def main() -> int:
                 max_valid_disp=(est.max_disp * float(depth_cfg.get("disp_extrapolation_ratio", 0.98) or 0)),
                 disp_scale=disp_scale, disp_offset=disp_offset)
             if builder is not None:
-                builder.build(depth, p_use, out.get("left_model_rgb"))
+                builder.build(depth, p_use, cloud_color_bgr(l2, out.get("left_model_rgb"), depth.shape))
             t3 = time.perf_counter()
             # 显示合成（不含 OpenCV 窗口的 imshow/waitKey，那部分约 20ms 实测另计）
             dv = colorize_depth(depth, valid, float(pc_cfg.get("zmin_m", 0.15)),

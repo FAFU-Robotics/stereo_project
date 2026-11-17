@@ -87,6 +87,49 @@ class FFSError(RuntimeError):
     """FFS 相关的可预期错误（权重缺失、接口不符、显存不足等）。"""
 
 
+def resolve_infer_scale(src_w: int, requested: float, limit: int = 1000) -> float:
+    """决定这一帧送给网络的缩放。不放大超过标定图，也不让模型宽度达到 limit。
+
+    标定内参对应的是相机实际输出的那幅图（本机单眼 640×480）。
+    scale = 模型宽度 / 标定图宽度。把标定图放大（scale>1）不会增加真实像素，
+    视差单位也会和 fx 对不齐，所以这里直接夹到 1。
+    标定图宽度本身小于 limit 时，scale=1 就是在标定分辨率上推理，不用重标定。
+    """
+    try:
+        req = float(requested)
+    except (TypeError, ValueError):
+        req = 1.0
+    if not (req > 0.0):
+        req = 1.0
+    req = min(req, 1.0)
+    width = int(src_w)
+    if width > 0 and width * req >= float(limit):
+        req = (float(limit) - 1.0) / float(width)
+    return req
+
+
+def disparity_to_source(disp: np.ndarray, src_w: int, src_h: int) -> np.ndarray:
+    """把模型网格上的视差变成标定图像素单位，并铺到标定图尺寸。
+
+    模型视差的 1 像素等于标定图上的 (src_w / model_w) 像素。
+    深度仍用原来的 fx、基线：full_disp = model_disp * src_w / model_w，
+    再配未缩放的标定内参，和「模型视差 + fx*scale」是同一个深度。
+    """
+    src = np.asarray(disp, np.float32)
+    if src.ndim != 2:
+        raise ValueError(f"视差必须是 2D，当前形状 {src.shape}")
+    mh, mw = int(src.shape[0]), int(src.shape[1])
+    if mw <= 0 or mh <= 0 or int(src_w) <= 0 or int(src_h) <= 0:
+        return np.ascontiguousarray(src)
+    factor = float(src_w) / float(mw)
+    if (mh, mw) == (int(src_h), int(src_w)):
+        if factor == 1.0:
+            return np.ascontiguousarray(src)
+        return np.ascontiguousarray(src * factor)
+    up = cv2.resize(src, (int(src_w), int(src_h)), interpolation=cv2.INTER_LINEAR)
+    return np.ascontiguousarray(up * factor)
+
+
 def _project_root_hint(repo_root: str) -> str:
     """项目根的"提示值"：只用于报错信息里显示，不参与真实查找。
 
@@ -274,11 +317,12 @@ class FFSDepthEstimator:
         输出：dict
             {
               "disp"            : np.float32 (Hm, Wm)  模型输入分辨率下的视差（像素），已 clip(0,None)
-              "disp_full"       : np.float32 (H, W)    最近邻上采样回原图尺寸的视差（便于叠加显示）
+              "disp_full"       : np.float32 (H, W)    标定图尺寸上的视差，单位是标定图像素
               "model_size"      : (Wm, Hm)             模型实际吃进去的尺寸（32 的整数倍）
-              "src_size"        : (W, H)              送进来的原始尺寸
-              "scale"           : float               实际缩放系数（深度换算时 K 要乘这个）
-              "left_model_rgb"  : np.uint8 (Hm, Wm, 3) 模型输入尺寸的左图（RGB），点云着色用
+              "src_size"        : (W, H)              送进来的原始尺寸（标定分辨率）
+              "scale"           : float               实际用的缩放（模型宽度 / 标定图宽度）
+              "left_model_rgb"  : np.uint8 (Hm, Wm, 3) 模型输入尺寸的左图（RGB）。
+                                  点云着色前要用 cloud_color_bgr() 转回 BGR，不能直接送进 build()
               "timings_ms"      : {"preprocess","infer","total"}
               "valid_ratio"     : float               视差 > 0 的像素比例（有效深度比例的雏形）
             }
@@ -298,14 +342,17 @@ class FFSDepthEstimator:
 
         t_start = time.perf_counter()
 
-        # ---- 1) 预处理：BGR->RGB、按 scale 缩放、右图对齐左图尺寸 ----
+        # ---- 1) 预处理：BGR->RGB。scale=1 时不再缩小，网络看到整幅标定图 ----
         img0 = cv2.cvtColor(left_bgr, cv2.COLOR_BGR2RGB)
         img1 = cv2.cvtColor(right_bgr, cv2.COLOR_BGR2RGB)
         H0, W0 = img0.shape[:2]
-        scale = self.scale
-        if scale != 1.0:
-            img0 = cv2.resize(img0, fx=scale, fy=scale, dsize=None)
-            img1 = cv2.resize(img1, dsize=(img0.shape[1], img0.shape[0]))
+        scale = resolve_infer_scale(W0, self.scale)
+        if abs(scale - 1.0) > 1e-6:
+            dst_w = max(1, int(round(W0 * scale)))
+            dst_h = max(1, int(round(H0 * scale)))
+            # 缩小用面积插值，避免默认线性插值把细结构抹掉后再送给网络。
+            img0 = cv2.resize(img0, (dst_w, dst_h), interpolation=cv2.INTER_AREA)
+            img1 = cv2.resize(img1, (dst_w, dst_h), interpolation=cv2.INTER_AREA)
         H, W = img0.shape[:2]
         if W >= 1000 and not self._warned_large:
             self._warned_large = True
@@ -345,7 +392,8 @@ class FFSDepthEstimator:
         # ---- 4) 后处理：unpad -> numpy -> clip ----
         disp = padder.unpad(disp.float())
         disp_np = disp.data.cpu().numpy().reshape(H, W).clip(0, None).astype(np.float32)
-        disp_full = cv2.resize(disp_np, (W0, H0), interpolation=cv2.INTER_NEAREST)
+        # 换回标定图像素。深度可以继续用未改过的 fx，只要视差和 fx 用同一套像素。
+        disp_full = disparity_to_source(disp_np, W0, H0)
 
         t_end = time.perf_counter()
 

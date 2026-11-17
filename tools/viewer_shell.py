@@ -84,7 +84,7 @@ SELECT = theme.SELECT
 HOVER = theme.HOVER
 SEAM = theme.SEAM
 
-PRESET_ITEMS = ((t("精确"), "precise"), (t("平衡"), "balanced"), (t("快速"), "fast"))
+PRESET_ITEMS = ((t("平衡"), "balanced"), (t("快速"), "fast"))
 
 
 def _enable_dpi() -> float:
@@ -107,18 +107,6 @@ def _enable_dpi() -> float:
     return scale
 
 
-def _font_family(root: tk.Misc) -> str:
-    try:
-        import tkinter.font as tkfont
-        have = set(tkfont.families(root))
-    except Exception:  # noqa: BLE001
-        return "TkDefaultFont"
-    for name in ("Microsoft YaHei UI", "Microsoft YaHei", "SimHei"):
-        if name in have:
-            return name
-    return "TkDefaultFont"
-
-
 def _imread(path: str) -> Optional[np.ndarray]:
     if not path or not os.path.isfile(path):
         return None
@@ -139,15 +127,21 @@ def _suggest_dist(points: np.ndarray) -> float:
     return float(max(radius * 2.6, 0.25))
 
 
-def _rgb_uint8_to_bgr(colors: Optional[np.ndarray], n: int) -> np.ndarray:
-    """Session / PLY 里的颜色是 RGB。OpenCV 画面要 BGR。"""
+def _as_bgr_u8(colors: Optional[np.ndarray], n: int) -> np.ndarray:
+    """点云颜色已经是 BGR uint8（与 DepthResult.colors、画面缓存一致）。
+
+    这里只补齐缺色和 0~1 浮点。不再交换通道：实时颜色若再反一次，
+    蓝壳（B 高、R 低）会变成橙色。
+    """
     if colors is None or len(colors) != n:
         return np.full((n, 3), 180, np.uint8)
     c = np.asarray(colors)
     if c.dtype != np.uint8:
         scale = 255.0 if (c.size and float(np.nanmax(c)) <= 1.0) else 1.0
-        c = np.clip(c * scale, 0, 255).astype(np.uint8)
-    return np.ascontiguousarray(c[:, ::-1])
+        c = np.clip(np.asarray(c, np.float32) * scale, 0, 255).astype(np.uint8)
+    if c.ndim != 2 or c.shape[1] != 3:
+        c = c.reshape(-1, 3)
+    return np.ascontiguousarray(c)
 
 
 def render_cloud(
@@ -235,7 +229,10 @@ def _draw_gizmo(img: np.ndarray, yaw: float, pitch: float) -> None:
 
 
 def _load_ply(path: str, max_points: int = 90000) -> Tuple[np.ndarray, np.ndarray]:
-    """读本程序写的 ASCII PLY，或 Open3D 能打开的二进制 PLY。颜色返回 RGB uint8。"""
+    """读本程序写的 ASCII PLY，或 Open3D 能打开的二进制 PLY。
+
+    文件里的颜色是 RGB。返回值换成 BGR，和实时点云、OpenCV 画面用同一套顺序。
+    """
     with open(path, "rb") as fh:
         head = fh.read(256)
     if b"format ascii" in head:
@@ -253,7 +250,7 @@ def _load_ply(path: str, max_points: int = 90000) -> Tuple[np.ndarray, np.ndarra
         rgb = np.clip(cols * 255.0, 0, 255).astype(np.uint8)
     else:
         rgb = np.full((len(pts), 3), 180, np.uint8)
-    return pts, rgb
+    return pts, np.ascontiguousarray(rgb[:, ::-1])
 
 
 def _load_ply_ascii(path: str, max_points: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -281,20 +278,22 @@ def _load_ply_ascii(path: str, max_points: int) -> Tuple[np.ndarray, np.ndarray]
                 cols.append((180, 180, 180))
     if not pts:
         return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint8)
-    return np.asarray(pts, np.float32), np.asarray(cols, np.uint8)
+    rgb = np.asarray(cols, np.uint8)
+    return np.asarray(pts, np.float32), np.ascontiguousarray(rgb[:, ::-1])
 
 
 class ViewerApp(tk.Tk):
     """主窗口。串流在后台线程里启动和停止，界面线程只取最新帧。"""
 
     def __init__(self, dpi_scale: float = 1.0) -> None:
+        # 必须早于 Tk()：Linux 上后注册的字体不会进已经建好的字体列表。
+        theme.prepare_fonts()
         super().__init__()
         if dpi_scale > 1.01:
             try:
                 self.tk.call("tk", "scaling", dpi_scale * 1.3333)
             except Exception:  # noqa: BLE001
                 pass
-        self.font_family = _font_family(self)
         self.title("Stereo Viewer")
         self.geometry("1280x800")
         self.minsize(1100, 680)
@@ -321,6 +320,20 @@ class ViewerApp(tk.Tk):
         self._pending_calib = False
         self._calib_proc: Optional[subprocess.Popen] = None
         self._closing = False
+        self._priming = False
+        self._start_when_ready = False
+        self._release_on_stop = False
+        self._release_model_on_stop = False
+        self._loss_job = False
+        self._pending_removed: List[str] = []
+        self._pending_arrived: List[str] = []
+        self._usb_stop = threading.Event()
+        self._stall_seq = -1
+        self._cap_seen_at = 0.0
+        self._slow_hits = 0
+        self._stream_grace = 0.0
+        self._suppress_prime = False
+        self._boot_cfg: Dict[str, Any] = {}
         self._result_paths: List[str] = []
         self.cloud_yaw = 0.55
         self.cloud_pitch = 0.28
@@ -335,7 +348,7 @@ class ViewerApp(tk.Tk):
         self.point_px = 2
 
         self.show_left = tk.BooleanVar(value=True)
-        self.show_right = tk.BooleanVar(value=False)
+        self.show_right = tk.BooleanVar(value=True)
         self.show_depth = tk.BooleanVar(value=True)
         self.show_disp = tk.BooleanVar(value=False)
         self.preset_var = tk.StringVar(value=preset_label)
@@ -354,7 +367,8 @@ class ViewerApp(tk.Tk):
         self.bind("3", lambda e: self._preset_view("cloud"))
         self.after(40, self._tick)
         self.after(80, self._refresh_results)
-        self._log(t("就绪。开始串流后可在 2D / 3D 之间切换。标定请先停止串流。"))
+        self.after(200, self._kick_devices)
+        self._log(t("就绪。开始串流后可在 2D / 3D 之间切换。标定前会先释放相机。"))
 
     # ------------------------------------------------------------------ 外观
     def _style_scale(self) -> None:
@@ -368,7 +382,7 @@ class ViewerApp(tk.Tk):
                background=[("pressed", "#4ad6ee"), ("active", "#4ad6ee")])
 
     def _f(self, size: int = 10, bold: bool = False) -> Tuple:
-        return (self.font_family, size, "bold" if bold else "normal")
+        return theme.font(size, bold)
 
     def _section(self, parent: tk.Misc, title: str) -> tk.Frame:
         box = tk.Frame(parent, bg=SIDE)
@@ -526,11 +540,14 @@ class ViewerApp(tk.Tk):
         scroll.grid(row=0, column=1, sticky="ns")
         inner = tk.Frame(canvas, bg=SIDE)
         win = canvas.create_window((0, 0), window=inner, anchor="nw")
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+        self.side_canvas = canvas
+        self.side_inner = inner
+        self.side_win = win
+        self._side_inner_h = -1
+        inner.bind("<Configure>", self._sync_side_scroll)
+        canvas.bind("<Configure>", self._on_side_canvas_configure)
         canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", self._side_wheel))
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-        self.side_canvas = canvas
 
         dev = self._section(inner, t("设备"))
         dev.pack(fill="x")
@@ -541,8 +558,10 @@ class ViewerApp(tk.Tk):
         self._paint_dot(MUTED)
         self.dev_text = tk.Label(row, text=t("未连接"), bg=SIDE, fg=TEXT, font=self._f(10, True))
         self.dev_text.pack(side="left", padx=8)
+        # 固定三行。串流后分辨率、有效比例、点数每帧都在变，
+        # 如果按窄宽度自动换行，侧栏高度会来回变，整栏就会上下跳，往上还能滚出空白。
         self.dev_sub = tk.Label(dev, text=t("开始串流后显示分辨率和帧率"), bg=SIDE, fg=MUTED,
-                                font=self._f(9), justify="left", anchor="w", wraplength=168)
+                                font=self._f(9), justify="left", anchor="nw", height=3)
         self.dev_sub.pack(fill="x", padx=14, pady=(0, 4))
 
         streams = self._section(inner, t("画面"))
@@ -719,8 +738,41 @@ class ViewerApp(tk.Tk):
         self.dot.delete("all")
         self.dot.create_oval(1, 1, 11, 11, fill=color, outline=color)
 
+    def _on_side_canvas_configure(self, event) -> None:
+        self.side_canvas.itemconfigure(self.side_win, width=event.width)
+        self._side_inner_h = -1
+        self._sync_side_scroll()
+
+    def _sync_side_scroll(self, _event=None) -> None:
+        """滚动区域从内容顶端算起。内容比窗口矮时不允许滚动，避免上方露出空白。"""
+        canvas = self.side_canvas
+        inner = self.side_inner
+        height = int(inner.winfo_reqheight())
+        if height == self._side_inner_h:
+            return
+        self._side_inner_h = height
+        width = max(int(canvas.winfo_width()), 1)
+        view_h = max(int(canvas.winfo_height()), 1)
+        canvas.configure(scrollregion=(0, 0, width, max(height, view_h)))
+        top, _bottom = canvas.yview()
+        if height <= view_h or top < 0:
+            canvas.yview_moveto(0)
+
     def _side_wheel(self, event) -> None:
-        self.side_canvas.yview_scroll(int(-event.delta / 120), "units")
+        canvas = self.side_canvas
+        top, bottom = canvas.yview()
+        step = int(-event.delta / 120) if event.delta else 0
+        if step == 0:
+            return
+        if step < 0 and top <= 0.001:
+            canvas.yview_moveto(0)
+            return
+        if step > 0 and bottom >= 0.999:
+            return
+        canvas.yview_scroll(step, "units")
+        top, _bottom = canvas.yview()
+        if top < 0:
+            canvas.yview_moveto(0)
 
     def _set_text(self, widget: tk.Text, text: str) -> None:
         widget.configure(state="normal")
@@ -742,10 +794,12 @@ class ViewerApp(tk.Tk):
     def _defaults(self) -> Tuple[float, float, str]:
         zmin, zmax, label = 0.15, 3.0, t("快速")
         self.config_path = _find("config.yaml")
+        self._boot_cfg = {}
         try:
             import yaml
             with open(self.config_path, "r", encoding="utf-8") as fh:
                 cfg = yaml.safe_load(fh) or {}
+            self._boot_cfg = cfg
             pc = cfg.get("pointcloud") or {}
             zmin = float(pc.get("zmin_m", zmin) or zmin)
             zmax = float(pc.get("zmax_m", zmax) or zmax)
@@ -755,11 +809,8 @@ class ViewerApp(tk.Tk):
             if preset in named:
                 label = named[preset]
             else:
-                scale = float(ffs.get("scale", 0.5) or 0.5)
-                iters = int(ffs.get("valid_iters", 4) or 4)
-                if scale >= 0.99 and iters >= 8:
-                    label = t("精确")
-                elif abs(scale - 0.75) < 0.05:
+                scale = float(ffs.get("scale", 0.75) or 0.75)
+                if abs(scale - 0.75) < 0.05 or scale >= 0.9:
                     label = t("平衡")
         except Exception:  # noqa: BLE001
             pass
@@ -787,7 +838,7 @@ class ViewerApp(tk.Tk):
             self._set_mode("3d")
             return
         self.show_left.set(which == "color")
-        self.show_right.set(False)
+        self.show_right.set(which == "color")
         self.show_depth.set(which == "depth")
         self.show_disp.set(False)
         self._set_mode("2d")
@@ -895,7 +946,7 @@ class ViewerApp(tk.Tk):
                 cv2.putText(img, "No points in range", (24, h // 2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (170, 170, 170), 1, cv2.LINE_AA)
                 return img
-            return render_cloud(pts, _rgb_uint8_to_bgr(cols, len(pts)), w, h,
+            return render_cloud(pts, _as_bgr_u8(cols, len(pts)), w, h,
                                 self.cloud_yaw, self.cloud_pitch, self.cloud_dist,
                                 self.cloud_pan[0], self.cloud_pan[1], point_px=self.point_px)
         tiles = self._collect_tiles()
@@ -1033,6 +1084,289 @@ class ViewerApp(tk.Tk):
             self._cursor = text
             self._paint_view()
 
+    # ------------------------------------------------------------------ 相机与热插拔
+    def _kick_devices(self) -> None:
+        """窗口出来之后再打开相机，避免把第一帧界面卡住。"""
+        if self._closing:
+            return
+        cfg = self._boot_cfg or {}
+        cam = cfg.get("camera") or {}
+        ffs = cfg.get("ffs") or {}
+        watch = bool(cam.get("hotplug_watch", True))
+        try:
+            interval = float(cam.get("hotplug_interval_s", 0.4) or 0.4)
+        except (TypeError, ValueError):
+            interval = 0.4
+        self._hotplug_interval = interval
+        if watch and not getattr(self, "_usb_started", False):
+            self._usb_started = True
+            threading.Thread(target=self._usb_loop, daemon=True).start()
+        if not bool(cam.get("auto_open", True)):
+            self._log(t("未自动打开相机。点开始串流时再连接。"))
+            return
+        self._begin_prime(bool(ffs.get("preload", True)))
+
+    def _begin_prime(self, preload: bool) -> None:
+        if self._closing or self._priming or self._suppress_prime:
+            return
+        if self._calib_proc is not None and self._calib_proc.poll() is None:
+            return
+        self._priming = True
+        self._paint_dot(WARN)
+        self.dev_text.configure(text=t("正在打开左右相机"))
+        self.status_var.set(t("正在打开左右相机"))
+        self._log(t("正在打开左右相机"))
+        threading.Thread(target=self._prime_worker, args=(preload,), daemon=True).start()
+
+    def _prime_worker(self, preload: bool) -> None:
+        try:
+            from stereo_sdk.session import Session
+            session = self.session or Session(self.config_path)
+            info = session.prime(preload_model=preload)
+            self.q.put(("primed", (session, info)))
+        except Exception as exc:  # noqa: BLE001
+            self.q.put(("prime_failed", f"{type(exc).__name__}: {exc}"))
+
+    def _usb_loop(self) -> None:
+        from camera_link import UsbCameraWatch, list_watched_ids
+        cam = (self._boot_cfg or {}).get("camera") or {}
+        match = str(cam.get("usb_match") or "")
+
+        def listed():
+            return list_watched_ids(match)
+
+        watch = UsbCameraWatch(listed)
+        interval = max(0.2, float(getattr(self, "_hotplug_interval", 0.4)))
+        while not self._usb_stop.wait(interval):
+            try:
+                removed, arrived = watch.poll_changes()
+            except Exception:  # noqa: BLE001
+                continue
+            if removed:
+                self.q.put(("usb_removed", removed))
+            if arrived:
+                self.q.put(("usb_arrived", arrived))
+
+    def _usb_worker(self, ids) -> None:
+        session = self.session
+        try:
+            if session is None:
+                info = {"changed": False}
+            else:
+                info = session.apply_usb_removal(ids)
+        except Exception as exc:  # noqa: BLE001
+            info = {"changed": True, "reason": f"{type(exc).__name__}: {exc}",
+                    "streaming_stopped": True, "remaining": [], "closed": ["left", "right"]}
+        self.q.put(("link_event", info))
+
+    def _loss_worker(self) -> None:
+        session = self.session
+        try:
+            info = session.consume_runtime_loss() if session is not None else {"changed": False}
+        except Exception as exc:  # noqa: BLE001
+            info = {"changed": True, "reason": f"{type(exc).__name__}: {exc}",
+                    "streaming_stopped": True, "remaining": [], "closed": ["left", "right"]}
+        self.q.put(("link_event", info))
+
+    def _show_links(self, info: Dict[str, Any]) -> None:
+        left = bool(info.get("left"))
+        right = bool(info.get("right"))
+        detail = str(info.get("detail") or "")
+        if detail:
+            self.dev_sub.configure(text=detail)
+        err = info.get("error")
+        if err:
+            self._log(str(err))
+        if left and right:
+            self._paint_dot(OK)
+            self.dev_text.configure(text=t("左右相机已打开"))
+            if info.get("model"):
+                self.status_var.set(t("相机与模型已就绪，开始串流会很快"))
+            else:
+                self.status_var.set(t("相机已就绪，可以开始串流"))
+            return
+        self._paint_dot(WARN if (left or right) else MUTED)
+        if left and not right:
+            self.dev_text.configure(text=t("右相机已断开"))
+        elif right and not left:
+            self.dev_text.configure(text=t("左相机已断开"))
+        else:
+            self.dev_text.configure(text=t("未连接"))
+            self.dev_sub.configure(text=t("开始串流后显示分辨率和帧率"))
+
+    def _reset_stall(self) -> None:
+        self._stall_seq = -1
+        self._cap_seen_at = 0.0
+        self._slow_hits = 0
+        self._stream_grace = 0.0
+
+    def _flush_usb_queues(self) -> None:
+        """先处理积压的拔出，拔出做完再处理插回。两边不要叠在同一次打开上。"""
+        if self._closing:
+            return
+        if self._pending_removed and not self._loss_job and not self._priming and self.session is not None:
+            ids = tuple(self._pending_removed)
+            self._pending_removed = []
+            self._loss_job = True
+            threading.Thread(target=self._usb_worker, args=(ids,), daemon=True).start()
+            return
+        if self._pending_arrived and not self._loss_job and not self._priming and not self.busy:
+            ids = tuple(self._pending_arrived)
+            self._pending_arrived = []
+            self._on_usb_arrived(ids)
+
+    def _on_usb_arrived(self, ids, from_watch: bool = True) -> None:
+        """匹配的相机重新出现：左右两路重新打开，下次开始串流用的是新句柄。"""
+        if from_watch:
+            # 真正的插回才允许再自动打开。上一次打开失败后，不要跟着接口闪烁重试。
+            self._suppress_prime = False
+        if self._closing or self._suppress_prime:
+            return
+        cam = (self._boot_cfg or {}).get("camera") or {}
+        if not bool(cam.get("auto_open", True)):
+            return
+        if self._calib_proc is not None and self._calib_proc.poll() is None:
+            return
+        match = str(cam.get("usb_match") or "").strip().lower()
+        if match and not any(match in str(i).lower() for i in (ids or ())):
+            return
+        if self.session is not None and getattr(self.session, "started", False):
+            return
+        if self.session is not None and getattr(self.session, "cameras_ready", False):
+            return
+        if self._priming or self.busy or self._loss_job:
+            self._pending_arrived.extend(list(ids or ()))
+            return
+        ffs = (self._boot_cfg or {}).get("ffs") or {}
+        self._log(t("相机已重新接上，正在打开左右相机"))
+        self._begin_prime(bool(ffs.get("preload", True)))
+
+    def _reopen_if_present(self) -> None:
+        """句柄已经释放。设备若还在系统里，马上把左右相机再打开。"""
+        if self._closing or self._loss_job or self._priming or self.busy:
+            return
+        cam = (self._boot_cfg or {}).get("camera") or {}
+        if not bool(cam.get("auto_open", True)):
+            return
+        if self.session is not None and (
+                getattr(self.session, "started", False)
+                or getattr(self.session, "cameras_ready", False)):
+            return
+        match = str(cam.get("usb_match") or "")
+        try:
+            from camera_link import list_watched_ids
+            present = list_watched_ids(match)
+        except Exception:  # noqa: BLE001
+            return
+        if not present:
+            return
+        self._on_usb_arrived(tuple(present), from_watch=False)
+
+    def _stall_worker(self) -> None:
+        session = self.session
+        try:
+            info = session.force_disconnect("相机无画面，已停止串流") if session is not None else {"changed": False}
+        except Exception as exc:  # noqa: BLE001
+            info = {"changed": True, "reason": f"{type(exc).__name__}: {exc}",
+                    "streaming_stopped": True, "remaining": [], "closed": ["left", "right"]}
+        self.q.put(("link_event", info))
+
+    def _note_capture(self, seq: int) -> None:
+        """串流中画面停住，或连续几帧都慢到不像这只相机，就停流并释放句柄。"""
+        if self._loss_job or self.busy or self._priming:
+            return
+        now = time.monotonic()
+        if now < self._stream_grace:
+            self._cap_seen_at = now
+            self._stall_seq = seq
+            self._slow_hits = 0
+            return
+        if seq != self._stall_seq:
+            gap = (now - self._cap_seen_at) if self._cap_seen_at else 0.0
+            self._cap_seen_at = now
+            self._stall_seq = seq
+            if gap > 0.9:
+                self._slow_hits += 1
+            else:
+                self._slow_hits = 0
+            if self._slow_hits >= 3:
+                self._loss_job = True
+                threading.Thread(target=self._stall_worker, daemon=True).start()
+            return
+        if self._cap_seen_at and now - self._cap_seen_at > 2.0:
+            self._loss_job = True
+            threading.Thread(target=self._stall_worker, daemon=True).start()
+
+    def _on_link_event(self, info: Dict[str, Any]) -> None:
+        self._loss_job = False
+        pending = self._pending_removed
+        if pending and self.session is not None and not self._closing:
+            self._pending_removed = []
+            self._loss_job = True
+            threading.Thread(target=self._usb_worker, args=(tuple(pending),), daemon=True).start()
+        try:
+            self._apply_link_event(info if isinstance(info, dict) else {"changed": False})
+        finally:
+            if not self._loss_job:
+                self._flush_usb_queues()
+
+    def _apply_link_event(self, info: Dict[str, Any]) -> None:
+        if info.get("needs_probe") and not info.get("changed"):
+            # 系统里还有别的摄像头时，拔掉任意一台都先不报。
+            # 真是我们的相机，采集线程读失败后会走下面的断开。
+            return
+        if not info.get("changed"):
+            return
+        reason = str(info.get("reason") or "")
+        if reason:
+            self._last_err = reason
+            self._log(t(reason) if reason in (
+                "左相机 USB 已断开", "右相机 USB 已断开", "左右相机 USB 已断开",
+                "USB 设备断开，读帧确认相机已掉线",
+                "相机无画面，已停止串流",
+            ) else reason)
+        remaining = set(info.get("remaining") or [])
+        self.busy = False
+        self.live_frame = None
+        self.live_res = None
+        self._frame_seq = -1
+        self._reset_stall()
+        self.btn_stream.configure(text=t("开始串流"), state="normal", bg=ACCENT, fg=ON_ACCENT,
+                                  activebackground="#4ad6ee", activeforeground=ON_ACCENT)
+        self.meta_var.set(t("分辨率 —    帧率 —"))
+        self._photo = None
+        try:
+            self.view.configure(image="")
+        except Exception:  # noqa: BLE001
+            pass
+        if remaining == {"left", "right"}:
+            self._show_links({"left": True, "right": True, "model": False, "detail": ""})
+        elif remaining == {"left"}:
+            self._paint_dot(WARN)
+            self.dev_text.configure(text=t("右相机已断开"))
+            self.status_var.set(t("右相机已断开"))
+        elif remaining == {"right"}:
+            self._paint_dot(WARN)
+            self.dev_text.configure(text=t("左相机已断开"))
+            self.status_var.set(t("左相机已断开"))
+        else:
+            self._paint_dot(MUTED)
+            self.dev_text.configure(text=t("未连接"))
+            self.dev_sub.configure(text=t("开始串流后显示分辨率和帧率"))
+            self.status_var.set(t("USB 设备已断开，串流已停止") if info.get("streaming_stopped")
+                                else t("相机已断开"))
+        if info.get("streaming_stopped") or not remaining:
+            self.view.configure(image="", text=t("相机已断开\n\n重新接上后可以再次开始串流"))
+        if not remaining:
+            self._reopen_if_present()
+        if self._pending_calib:
+            self._pending_calib = False
+            self._spawn_calib()
+        if self._closing and self.session is not None:
+            self._request_stop(release_cameras=True, release_model=True)
+        elif self._closing:
+            self.destroy()
+
     # ------------------------------------------------------------------ 串流
     def _toggle_stream(self) -> None:
         if self.busy:
@@ -1047,24 +1381,53 @@ class ViewerApp(tk.Tk):
             self._request_start()
 
     def _request_start(self) -> None:
+        if self._priming:
+            self._start_when_ready = True
+            self.busy = True
+            self.btn_stream.configure(text=t("正在连接…"), state="disabled", bg=RAISED, fg=MUTED)
+            self._paint_dot(WARN)
+            self.dev_text.configure(text=t("正在连接"))
+            self.status_var.set(t("相机正在打开，完成后立即开始串流"))
+            self._log(t("相机正在打开，完成后立即开始串流"))
+            return
         self.busy = True
         self.btn_stream.configure(text=t("正在连接…"), state="disabled", bg=RAISED, fg=MUTED)
         self._paint_dot(WARN)
         self.dev_text.configure(text=t("正在连接"))
-        self.status_var.set(t("正在打开相机并加载模型"))
-        self._log(t("正在打开相机并加载模型…"))
+        ready = self.session is not None and getattr(self.session, "cameras_ready", False)
+        model = self.session is not None and getattr(self.session, "model_ready", False)
+        if ready and model:
+            self.status_var.set(t("正在启动串流"))
+            self._log(t("相机和模型已就绪，正在启动串流"))
+        else:
+            self.status_var.set(t("正在打开相机并加载模型"))
+            self._log(t("正在打开相机并加载模型…"))
         threading.Thread(target=self._start_worker, daemon=True).start()
 
     def _start_worker(self) -> None:
         try:
             from stereo_sdk.session import Session
-            session = Session(self.config_path)
+            session = self.session
+            if session is None:
+                session = Session(self.config_path)
             session.start()
             self.q.put(("started", session))
         except Exception as exc:  # noqa: BLE001
             self.q.put(("start_failed", f"{type(exc).__name__}: {exc}"))
 
-    def _request_stop(self) -> None:
+    def _request_stop(self, release_cameras: bool = False, release_model: bool = False) -> None:
+        # 退出过程中热插拔和关闭按钮可能各叫一次。第二次直接等第一次的停止结果。
+        if self.busy and self._closing:
+            return
+        if self.session is None:
+            if self._closing:
+                self.destroy()
+            return
+        if (not getattr(self.session, "started", False) and not release_cameras
+                and not release_model and not self._closing):
+            return
+        self._release_on_stop = release_cameras or self._closing
+        self._release_model_on_stop = release_model or self._closing
         self.busy = True
         self.btn_stream.configure(text=t("正在停止…"), state="disabled", bg=RAISED, fg=MUTED)
         self.status_var.set(t("正在停止串流"))
@@ -1075,7 +1438,8 @@ class ViewerApp(tk.Tk):
         err = ""
         try:
             if session is not None:
-                session.stop()
+                session.stop(release_cameras=self._release_on_stop,
+                             release_model=self._release_model_on_stop)
         except Exception as exc:  # noqa: BLE001
             err = str(exc)
         self.q.put(("stopped", err))
@@ -1103,27 +1467,41 @@ class ViewerApp(tk.Tk):
         except Exception:  # noqa: BLE001
             self._slider_lock = False
         self._log(t("串流已开始"))
+        self._stall_seq = -1
+        self._cap_seen_at = time.monotonic()
+        self._slow_hits = 0
+        self._stream_grace = time.monotonic() + 3.0
         err = session.last_error() if hasattr(session, "last_error") else None
         if err:
             self._log(err)
 
     def _on_stopped(self, err: str) -> None:
-        self.session = None
         self.live_frame = None
         self.live_res = None
         self.busy = False
+        self._frame_seq = -1
         self.btn_stream.configure(text=t("开始串流"), state="normal", bg=ACCENT, fg=ON_ACCENT,
                                   activebackground="#4ad6ee", activeforeground=ON_ACCENT)
-        self._paint_dot(MUTED)
-        self.dev_text.configure(text=t("未连接"))
-        self.dev_sub.configure(text=t("开始串流后显示分辨率和帧率"))
-        self.status_var.set(t("已停止"))
+        kept = self.session is not None and getattr(self.session, "cameras_ready", False)
         self.meta_var.set(t("分辨率 —    帧率 —"))
         self._photo = None
-        self.view.configure(image="",
-                            text=t("串流已停止\n\n右上角可以再次开始\n右侧结果仍可点开回看"))
+        if kept:
+            self._paint_dot(OK)
+            self.dev_text.configure(text=t("左右相机已打开"))
+            self.status_var.set(t("串流已停止，相机仍保持打开"))
+            self.view.configure(image="",
+                                text=t("串流已停止\n\n相机仍开着，再次开始会很快\n右侧结果仍可点开回看"))
+        else:
+            self._paint_dot(MUTED)
+            self.dev_text.configure(text=t("未连接"))
+            self.dev_sub.configure(text=t("开始串流后显示分辨率和帧率"))
+            self.status_var.set(t("已停止"))
+            self.view.configure(image="",
+                                text=t("串流已停止\n\n右上角可以再次开始\n右侧结果仍可点开回看"))
         if err:
             self._log(tf("停止时出错：{exc}", exc=err))
+        elif kept:
+            self._log(t("串流已停止，相机仍保持打开"))
         else:
             self._log(t("串流已停止"))
         if self._pending_calib:
@@ -1131,6 +1509,8 @@ class ViewerApp(tk.Tk):
             self._spawn_calib()
         if self._closing:
             self.destroy()
+        else:
+            self._flush_usb_queues()
 
     def _on_range(self, _value=None) -> None:
         if self._slider_lock:
@@ -1215,13 +1595,16 @@ class ViewerApp(tk.Tk):
         if self._calib_proc is not None and self._calib_proc.poll() is None:
             self._log(t("标定工作台已经开着"))
             return
-        if self.busy:
+        if self.busy or self._priming:
             self._log(t("正在连接或断开，请稍候再打开标定"))
             return
-        if self.session is not None and getattr(self.session, "started", False):
+        holds = (self.session is not None and (
+            getattr(self.session, "started", False)
+            or getattr(self.session, "cameras_ready", False)))
+        if holds:
             self._pending_calib = True
-            self._log(t("先停止串流，把相机交给标定工作台"))
-            self._request_stop()
+            self._log(t("先释放相机，把设备交给标定工作台"))
+            self._request_stop(release_cameras=True, release_model=False)
             return
         self._spawn_calib()
 
@@ -1257,6 +1640,10 @@ class ViewerApp(tk.Tk):
         self.status_var.set(t("已停止"))
         self._log(t("标定工作台已关闭，正在刷新结果"))
         self._refresh_results()
+        cam = (self._boot_cfg or {}).get("camera") or {}
+        if bool(cam.get("auto_open", True)) and not self._closing:
+            ffs = (self._boot_cfg or {}).get("ffs") or {}
+            self._begin_prime(bool(ffs.get("preload", True)))
 
     def _refresh_results(self) -> None:
         self._set_text(self.calib_box, self._calib_summary())
@@ -1400,6 +1787,21 @@ class ViewerApp(tk.Tk):
         except queue.Empty:
             pass
         session = self.session
+        loss = False
+        if session is not None and not self._loss_job and not self.busy:
+            try:
+                loss = bool(session.poll_runtime_loss())
+            except Exception:  # noqa: BLE001
+                loss = False
+        if loss:
+            self._loss_job = True
+            threading.Thread(target=self._loss_worker, daemon=True).start()
+        if session is not None and getattr(session, "started", False) and not self._loss_job:
+            try:
+                _frame, seq = session.latest_frame()
+                self._note_capture(int(seq or 0))
+            except Exception:  # noqa: BLE001
+                pass
         if session is not None and getattr(session, "started", False) and not self.paused:
             try:
                 frame, seq = session.latest_frame()
@@ -1415,7 +1817,8 @@ class ViewerApp(tk.Tk):
                         if self.review is None:
                             self._view_dirty = True
                 err = session.last_error() if hasattr(session, "last_error") else None
-                if err and err != self._last_err:
+                # 读失败交给断开流程去记，这里只记降档之类的提示，避免同一句打两遍。
+                if err and err != self._last_err and not self._loss_job:
                     self._last_err = err
                     self._log(err)
                 st = session.stats()
@@ -1430,11 +1833,13 @@ class ViewerApp(tk.Tk):
                     cap=float(st.get("capture_fps") or 0),
                     inf=float(st.get("infer_fps") or 0),
                     med=med, preset=st.get("preset") or ""))
-                self.dev_sub.configure(text=tf(
-                    "{eye}    有效 {valid:.0f}%    点数 {pts}",
+                sub = tf(
+                    "{eye}\n有效 {valid:.0f}%\n点数 {pts}",
                     eye=eye or t("分辨率未知"),
                     valid=float(st.get("valid_ratio") or 0),
-                    pts=int(st.get("points") or 0)))
+                    pts=int(st.get("points") or 0))
+                if sub != self.dev_sub.cget("text"):
+                    self.dev_sub.configure(text=sub)
             except Exception as exc:  # noqa: BLE001
                 self._log(f"刷新画面失败：{exc}")
         if self._view_dirty and not self.paused:
@@ -1451,12 +1856,57 @@ class ViewerApp(tk.Tk):
             self._on_started(payload)
         elif kind == "start_failed":
             self.busy = False
-            self.session = None
-            self.btn_stream.configure(text=t("开始串流"), state="normal", bg=ACCENT)
-            self._paint_dot(DANGER)
-            self.dev_text.configure(text=t("连接失败"))
-            self.status_var.set(t("连接失败"))
+            self._start_when_ready = False
+            self.btn_stream.configure(text=t("开始串流"), state="normal", bg=ACCENT, fg=ON_ACCENT)
             self._log(str(payload))
+            self._suppress_prime = True
+            if self.session is not None and getattr(self.session, "cameras_ready", False):
+                self._show_links(self.session.link_status())
+                self.status_var.set(t("连接失败"))
+            else:
+                self._paint_dot(DANGER)
+                self.dev_text.configure(text=t("连接失败"))
+                self.status_var.set(t("连接失败"))
+        elif kind == "primed":
+            self._priming = False
+            session, info = payload
+            self.session = session
+            self._show_links(info if isinstance(info, dict) else {})
+            if not (isinstance(info, dict) and info.get("error")):
+                self._log(t("左右相机已打开"))
+            self._flush_usb_queues()
+            if self._start_when_ready and not self._closing:
+                self._start_when_ready = False
+                self.busy = False
+                self._request_start()
+        elif kind == "prime_failed":
+            self._priming = False
+            self._start_when_ready = False
+            self.busy = False
+            self.btn_stream.configure(text=t("开始串流"), state="normal", bg=ACCENT, fg=ON_ACCENT)
+            self._paint_dot(DANGER)
+            self.dev_text.configure(text=t("相机打开失败"))
+            self.status_var.set(t("相机打开失败"))
+            self._log(str(payload))
+            self._suppress_prime = True
+            self._flush_usb_queues()
+        elif kind == "usb_removed":
+            ids = tuple(payload or ())
+            if self._loss_job or self._priming:
+                self._pending_removed.extend(ids)
+            elif self.session is None:
+                pass
+            else:
+                self._loss_job = True
+                threading.Thread(target=self._usb_worker, args=(ids,), daemon=True).start()
+        elif kind == "usb_arrived":
+            ids = tuple(payload or ())
+            if self._loss_job or self._priming or self.busy:
+                self._pending_arrived.extend(ids)
+            else:
+                self._on_usb_arrived(ids)
+        elif kind == "link_event":
+            self._on_link_event(payload if isinstance(payload, dict) else {"changed": False})
         elif kind == "stopped":
             self._on_stopped(str(payload or ""))
         elif kind == "preset_done":
@@ -1514,15 +1964,21 @@ class ViewerApp(tk.Tk):
         if self._closing:
             return
         self._closing = True
+        self._usb_stop.set()
         proc = self._calib_proc
         if proc is not None and proc.poll() is None:
             self._log(t("标定工作台还开着，请先关掉它再退出"))
             self._closing = False
+            self._usb_stop.clear()
             return
-        if self.session is not None and getattr(self.session, "started", False):
-            self._request_stop()
+        holds = self.session is not None and (
+            getattr(self.session, "started", False)
+            or getattr(self.session, "cameras_ready", False)
+            or getattr(self.session, "model_ready", False))
+        if holds:
+            self._request_stop(release_cameras=True, release_model=True)
             return
-        if self.busy:
+        if self.busy or self._priming:
             self.after(200, self._on_close)
             return
         self.destroy()
